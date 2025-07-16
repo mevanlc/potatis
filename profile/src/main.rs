@@ -27,8 +27,8 @@ impl nes::nes::HostPlatform for FakeHost {
     assert_eq!(buf.len(), EXPECTED_FRAME_SIZE);
   }
 
-  fn poll_events(&mut self, _: &mut nes::joypad::Joypad) -> nes::nes::Shutdown {
-    nes::nes::Shutdown::No
+  fn poll_events(&mut self, _: &mut nes::joypad::Joypad) -> nes::nes::HostEvent {
+    nes::nes::HostEvent::Nothing
   }
 
   fn pixel_format(&self) -> nes::nes::HostPixelFormat {

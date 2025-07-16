@@ -40,7 +40,7 @@ impl From<u16> for Register {
   }
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Copy, Clone)]
 pub enum TickEvent {
   Nothing,
   EnteredVblank,

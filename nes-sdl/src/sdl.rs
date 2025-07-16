@@ -4,8 +4,8 @@ use nes::frame::RenderFrame;
 use nes::joypad::Joypad;
 use nes::joypad::JoypadButton;
 use nes::joypad::JoypadEvent;
-use nes::nes::HostPlatform;
-use nes::nes::Shutdown;
+use nes::nes::HostEvent;
+use nes::nes::{EmulationSpeed, HostPlatform};
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::PixelFormatEnum;
@@ -22,25 +22,58 @@ pub struct SdlHostPlatform<'a> {
   texture: Texture<'a>,
   _creator: TextureCreator<WindowContext>,
   time: Instant,
+  vsync_enabled: bool,
 }
 
 impl SdlHostPlatform<'_> {
   pub fn new() -> Self {
-    // TODO: Inject
+    let sdl_context = sdl2::init().unwrap();
+    let (canvas, texture, creator) = Self::create_canvas(&sdl_context, true);
+    Self {
+      _creator: creator,
+      context: sdl_context,
+      canvas,
+      texture,
+      time: Instant::now(),
+      vsync_enabled: true,
+    }
+  }
+
+  fn set_vsync(&mut self, enabled: bool) {
+    let (canvas, texture, creator) = Self::create_canvas(&self.context, enabled);
+    self.canvas = canvas;
+    self.texture = texture;
+    self._creator = creator;
+    self.vsync_enabled = enabled;
+  }
+
+  fn create_canvas<'a>(
+    sdl_context: &Sdl,
+    vsync: bool,
+  ) -> (Canvas<Window>, Texture<'a>, TextureCreator<WindowContext>) {
     let scale = 4;
     let w = nes::frame::NTSC_WIDTH as u32;
     let h = nes::frame::NTSC_HEIGHT as u32;
-
-    let sdl_context = sdl2::init().unwrap();
+    let window_width = w * scale;
+    let window_height = h * scale;
     let video_subsystem = sdl_context.video().unwrap();
 
     let window = video_subsystem
-      .window("Potatis", w * scale, h * scale)
+      .window("Potatis", window_width, window_height)
       .position_centered()
       .build()
       .unwrap();
 
-    let canvas = window.into_canvas().present_vsync().build().unwrap();
+    let canvas = if vsync {
+      window
+        .into_canvas()
+        .accelerated()
+        .present_vsync()
+        .build()
+        .unwrap()
+    } else {
+      window.into_canvas().accelerated().build().unwrap()
+    };
 
     let mut creator = canvas.texture_creator();
     let texture: Texture = unsafe {
@@ -50,13 +83,7 @@ impl SdlHostPlatform<'_> {
         .unwrap()
     };
 
-    Self {
-      _creator: creator,
-      context: sdl_context,
-      canvas,
-      texture,
-      time: Instant::now(),
-    }
+    (canvas, texture, creator)
   }
 }
 
@@ -71,7 +98,7 @@ impl HostPlatform for SdlHostPlatform<'_> {
     self.canvas.present();
   }
 
-  fn poll_events(&mut self, joypad: &mut Joypad) -> Shutdown {
+  fn poll_events(&mut self, joypad: &mut Joypad) -> HostEvent {
     for event in self.context.event_pump().unwrap().poll_iter() {
       if let Some(joypad_ev) = map_joypad(&event) {
         joypad.on_event(joypad_ev);
@@ -87,15 +114,56 @@ impl HostPlatform for SdlHostPlatform<'_> {
         | Event::KeyDown {
           keycode: Some(Keycode::Escape),
           ..
-        } => return Shutdown::Yes,
+        } => return HostEvent::Shutdown,
         Event::KeyDown {
           keycode: Some(Keycode::R),
           ..
-        } => return Shutdown::Reset,
+        } => return HostEvent::Reset,
+        Event::KeyDown {
+          keycode: Some(Keycode::Num1),
+          ..
+        } => {
+          println!(
+            "Speed: Normal (authentic NES timing, VSync {})",
+            self.vsync_enabled
+          );
+          return HostEvent::ChangeSpeed(EmulationSpeed::Normal);
+        }
+        Event::KeyDown {
+          keycode: Some(Keycode::Num2),
+          ..
+        } => {
+          println!("Speed: 2x (VSync {})", self.vsync_enabled);
+          return HostEvent::ChangeSpeed(EmulationSpeed::Fast(2));
+        }
+        Event::KeyDown {
+          keycode: Some(Keycode::Num3),
+          ..
+        } => {
+          println!("Speed: 3x (VSync {})", self.vsync_enabled);
+          return HostEvent::ChangeSpeed(EmulationSpeed::Fast(3));
+        }
+        Event::KeyDown {
+          keycode: Some(Keycode::Num0),
+          ..
+        } => {
+          println!(
+            "Speed: Uncapped (max performance, VSync {})",
+            self.vsync_enabled
+          );
+          return HostEvent::ChangeSpeed(EmulationSpeed::Uncapped);
+        }
+        Event::KeyDown {
+          keycode: Some(Keycode::V),
+          ..
+        } => {
+          self.set_vsync(!self.vsync_enabled);
+          println!("VSync: {}", self.vsync_enabled);
+        }
         _ => (),
       }
     }
-    Shutdown::No
+    HostEvent::Nothing
   }
 
   fn elapsed_millis(&self) -> usize {
@@ -103,7 +171,6 @@ impl HostPlatform for SdlHostPlatform<'_> {
   }
 
   fn delay(&self, d: std::time::Duration) {
-    // SDL_Delay?
     std::thread::sleep(d)
   }
 }

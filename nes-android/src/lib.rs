@@ -119,7 +119,7 @@ impl nes::nes::HostPlatform for AndroidHost {
     }
   }
 
-  fn poll_events(&mut self, joypad: &mut nes::joypad::Joypad) -> nes::nes::Shutdown {
+  fn poll_events(&mut self, joypad: &mut nes::joypad::Joypad) -> nes::nes::HostEvent {
     let state = self
       .env
       .call_method(&self.bindings, "input", "()B", &[])
@@ -144,6 +144,6 @@ impl nes::nes::HostPlatform for AndroidHost {
         joypad.on_event(nes::joypad::JoypadEvent::Release(*btn));
       });
 
-    nes::nes::Shutdown::No
+    nes::nes::HostEvent::Nothing
   }
 }

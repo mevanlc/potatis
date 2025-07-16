@@ -24,23 +24,24 @@ use crate::nesbus::NesBus;
 use crate::ppu::ppu::Ppu;
 use crate::ppu::ppu::TickEvent;
 
-const DEFAULT_FPS_MAX: usize = 60;
+const NES_NATIVE_FPS: f32 = 60.0988;
 
-#[derive(PartialEq, Eq)]
-pub enum Shutdown {
-  Yes,
-  No,
-  Reset,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmulationSpeed {
+  /// Normal NES timing - respects authentic PPU timing (60.0988 FPS)
+  Normal,
+  /// Fast mode with integer multiplier (2 = 2x speed, 3 = 3x speed, etc.)
+  Fast(u32),
+  /// Uncapped - run as fast as possible, limited only by host system
+  Uncapped,
 }
 
-impl From<bool> for Shutdown {
-  fn from(b: bool) -> Self {
-    if b {
-      Shutdown::Yes
-    } else {
-      Shutdown::No
-    }
-  }
+#[derive(PartialEq, Eq)]
+pub enum HostEvent {
+  Shutdown,
+  Reset,
+  ChangeSpeed(EmulationSpeed),
+  Nothing,
 }
 
 #[derive(PartialEq, Default)]
@@ -52,7 +53,7 @@ pub enum HostPixelFormat {
 
 pub trait HostPlatform {
   fn render(&mut self, frame: &RenderFrame);
-  fn poll_events(&mut self, joypad: &mut Joypad) -> Shutdown;
+  fn poll_events(&mut self, joypad: &mut Joypad) -> HostEvent;
 
   fn elapsed_millis(&self) -> usize {
     // Not required. Up to platform to implement for FPS control.
@@ -61,6 +62,10 @@ pub trait HostPlatform {
 
   fn delay(&self, _: Duration) {
     // Not required. Up to platform to implement for FPS control.
+  }
+
+  fn set_vsync(&mut self, _enabled: bool) {
+    // Not required. Up to platform to implement VSync control.
   }
 
   fn pixel_format(&self) -> HostPixelFormat {
@@ -79,8 +84,8 @@ pub trait HostPlatform {
 struct HeadlessHost;
 impl HostPlatform for HeadlessHost {
   fn render(&mut self, _: &RenderFrame) {}
-  fn poll_events(&mut self, _: &mut Joypad) -> Shutdown {
-    Shutdown::No
+  fn poll_events(&mut self, _: &mut Joypad) -> HostEvent {
+    HostEvent::Nothing
   }
   fn elapsed_millis(&self) -> usize {
     0
@@ -94,8 +99,9 @@ pub struct Nes {
   host: Box<dyn HostPlatform>,
   joypad: Rc<RefCell<Joypad>>,
   timing: FrameTiming,
-  pub show_fps: bool,
-  shutdown: Shutdown,
+  show_fps: bool,
+  shutdown: bool,
+  emulation_speed: EmulationSpeed,
 }
 
 impl Nes {
@@ -122,8 +128,9 @@ impl Nes {
       host: Box::new(host),
       joypad,
       timing: FrameTiming::new(),
-      shutdown: Shutdown::No,
+      shutdown: false,
       show_fps: false,
+      emulation_speed: EmulationSpeed::Normal,
     }
   }
 
@@ -134,23 +141,42 @@ impl Nes {
   pub fn tick(&mut self) {
     let cpu_cycles = self.machine.tick();
 
-    let mut ppu = self.ppu.borrow_mut();
-    let ppu_event = ppu.tick(cpu_cycles * 3);
+    let (ppu_event, should_trigger_nmi) = {
+      let mut ppu = self.ppu.borrow_mut();
+      let ppu_event = ppu.tick(cpu_cycles * 3);
+      let should_trigger_nmi = ppu.nmi_on_vblank();
+
+      if ppu_event == TickEvent::EnteredVblank {
+        if self.show_fps {
+          let fps = self.timing.fps_avg(self.host.elapsed_millis());
+          fonts::draw(fps.to_string().as_str(), (10, 10), ppu.frame_mut());
+        }
+
+        self.host.render(ppu.frame())
+      }
+
+      (ppu_event, should_trigger_nmi)
+    };
 
     if ppu_event == TickEvent::EnteredVblank {
-      if self.show_fps {
-        let fps = self.timing.fps_avg(self.host.elapsed_millis());
-        fonts::draw(fps.to_string().as_str(), (10, 10), ppu.frame_mut());
+      let event = self.host.poll_events(&mut self.joypad.borrow_mut());
+      self.handle_event(event);
+
+      // Apply frame timing based on speed mode
+      match self.emulation_speed {
+        EmulationSpeed::Normal | EmulationSpeed::Fast(_) => {
+          if let Some(delay) = self.timing.post_render(self.host.elapsed_millis()) {
+            self.host.delay(delay);
+          }
+        }
+        EmulationSpeed::Uncapped => {
+          // No delay - run as fast as possible
+        }
       }
 
-      self.host.render(ppu.frame());
-      self.shutdown = self.host.poll_events(&mut self.joypad.borrow_mut());
-      if let Some(delay) = self.timing.post_render(self.host.elapsed_millis()) {
-        self.host.delay(delay);
-      }
       self.timing.post_delay(self.host.elapsed_millis());
 
-      if ppu.nmi_on_vblank() {
+      if should_trigger_nmi {
         self.machine.cpu.nmi();
       }
     }
@@ -158,10 +184,16 @@ impl Nes {
     if ppu_event == TickEvent::TriggerIrq {
       self.machine.cpu.irq();
     }
+  }
 
-    if self.shutdown == Shutdown::Reset {
-      self.machine.cpu.reset();
-      self.shutdown = Shutdown::No
+  fn handle_event(&mut self, event: HostEvent) {
+    match event {
+      HostEvent::ChangeSpeed(new_speed) => {
+        self.set_emulation_speed(new_speed);
+      }
+      HostEvent::Shutdown => self.shutdown = true,
+      HostEvent::Reset => self.machine.cpu.reset(),
+      HostEvent::Nothing => (),
     }
   }
 
@@ -194,8 +226,25 @@ impl Nes {
     self.show_fps = show_fps;
   }
 
+  pub fn set_emulation_speed(&mut self, speed: EmulationSpeed) {
+    self.emulation_speed = speed;
+
+    match speed {
+      EmulationSpeed::Normal => {
+        self.timing.fps_max(NES_NATIVE_FPS as usize);
+      }
+      EmulationSpeed::Fast(multiplier) => {
+        let target_fps = (NES_NATIVE_FPS * multiplier as f32) as usize;
+        self.timing.fps_max(target_fps.min(1000));
+      }
+      EmulationSpeed::Uncapped => {
+        self.timing.fps_max(u32::MAX as usize);
+      }
+    }
+  }
+
   pub fn powered_on(&self) -> bool {
-    self.shutdown != Shutdown::Yes
+    !self.shutdown
   }
 }
 
@@ -203,6 +252,8 @@ struct FrameTiming {
   frame_n: usize,
   last_frame_timestamp: usize,
   frame_limit_ms: usize,
+  frame_times: [usize; 60], // Store last 60 frame times for rolling average
+  frame_times_index: usize,
 }
 
 impl FrameTiming {
@@ -210,7 +261,9 @@ impl FrameTiming {
     Self {
       frame_n: 0,
       last_frame_timestamp: 0,
-      frame_limit_ms: 1000 / DEFAULT_FPS_MAX,
+      frame_limit_ms: 1000 / NES_NATIVE_FPS as usize,
+      frame_times: [0; 60],
+      frame_times_index: 0,
     }
   }
 
@@ -218,10 +271,18 @@ impl FrameTiming {
     self.frame_limit_ms = 1000 / fps_max;
   }
 
-  pub fn fps_avg(&mut self, elapsed: usize) -> usize {
-    let secs = elapsed / 1000;
-    if secs != 0 {
-      self.frame_n / secs
+  pub fn fps_avg(&self, _elapsed: usize) -> usize {
+    // Calculate rolling average of last 60 frames
+    let valid_frames = self.frame_times.iter().filter(|&&time| time > 0).count();
+    if valid_frames < 2 {
+      return 0;
+    }
+
+    let total_time: usize = self.frame_times.iter().filter(|&&time| time > 0).sum();
+    let avg_frame_time = total_time / valid_frames;
+
+    if avg_frame_time > 0 {
+      1000 / avg_frame_time // Convert ms per frame to FPS
     } else {
       0
     }
@@ -242,6 +303,13 @@ impl FrameTiming {
   }
 
   pub fn post_delay(&mut self, elapsed: usize) {
+    // Record frame time for rolling average
+    if self.last_frame_timestamp != 0 {
+      let frame_time = elapsed - self.last_frame_timestamp;
+      self.frame_times[self.frame_times_index] = frame_time;
+      self.frame_times_index = (self.frame_times_index + 1) % self.frame_times.len();
+    }
+
     self.frame_n += 1;
     self.last_frame_timestamp = elapsed;
   }

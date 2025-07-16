@@ -3,9 +3,9 @@ use nes::frame::PixelFormat;
 use nes::frame::SetPixel;
 use nes::joypad::JoypadButton;
 use nes::joypad::JoypadEvent;
+use nes::nes::HostEvent;
 use nes::nes::HostPlatform;
 use nes::nes::Nes;
-use nes::nes::Shutdown;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 
@@ -77,7 +77,7 @@ impl HostPlatform for WasmHostPlatform {
     self.browser.on_frame_ready(pixels.as_ptr(), pixels.len());
   }
 
-  fn poll_events(&mut self, joypad: &mut nes::joypad::Joypad) -> Shutdown {
+  fn poll_events(&mut self, joypad: &mut nes::joypad::Joypad) -> HostEvent {
     self
       .browser
       .poll_keyboard(self.keyboard.0.as_mut_ptr() as *mut u8);
@@ -104,7 +104,7 @@ impl HostPlatform for WasmHostPlatform {
       joypad.on_event(joypad_event);
     }
 
-    Shutdown::No
+    HostEvent::Nothing
   }
 
   fn elapsed_millis(&self) -> usize {

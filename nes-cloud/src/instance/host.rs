@@ -9,13 +9,13 @@ use nes::frame::RenderFrame;
 use nes::joypad::Joypad;
 use nes::joypad::JoypadButton;
 use nes::joypad::JoypadEvent;
+use nes::nes::HostEvent;
 use nes::nes::HostPlatform;
-use nes::nes::Shutdown;
 
 use crate::io::CloudStream;
 use crate::renderers::RenderMode;
 use crate::renderers::Renderer;
-use crate::renderers::{self,};
+use crate::renderers::{self};
 
 const PRESS_RELEASED_AFTER_MS: u128 = 250;
 
@@ -101,7 +101,7 @@ impl HostPlatform for CloudHost {
     }
   }
 
-  fn poll_events(&mut self, joypad: &mut Joypad) -> Shutdown {
+  fn poll_events(&mut self, joypad: &mut Joypad) -> HostEvent {
     match self.rx.recv_timeout(Duration::from_millis(0)) {
       Ok(key) => {
         let button = self.map_button(key);
@@ -116,7 +116,12 @@ impl HostPlatform for CloudHost {
         self.release_keys(joypad);
       }
     }
-    self.dead.into()
+
+    if self.dead {
+      HostEvent::Shutdown
+    } else {
+      HostEvent::Nothing
+    }
   }
 
   fn elapsed_millis(&self) -> usize {

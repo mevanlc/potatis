@@ -32,6 +32,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   let mut nes = Nes::insert(cartridge, SdlHostPlatform::new());
   nes.show_fps(std::env::var("SHOW_FPS").is_ok());
 
+  println!("\nKeyboard Controls:");
+  println!("  1 = Normal speed (authentic NES timing)");
+  println!("  2 = 2x speed");
+  println!("  3 = 3x speed");
+  println!("  0 = Uncapped speed (max performance)");
+  println!("  V = Toggle VSync");
+  println!("  R = Reset");
+  println!("  Q/ESC = Quit\n");
+
   let mut debugger = nes.debugger();
   debugger.verbose(args.verbose);
 

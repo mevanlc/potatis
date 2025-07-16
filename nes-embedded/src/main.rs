@@ -58,9 +58,7 @@ struct EmbeddedHost {
 
 impl EmbeddedHost {
   fn new(core1: SioFifo) -> Self {
-    Self {
-      core1,
-    }
+    Self { core1 }
   }
 }
 
@@ -80,8 +78,8 @@ impl nes::nes::HostPlatform for EmbeddedHost {
     self.core1.write(1);
   }
 
-  fn poll_events(&mut self, _joypad: &mut nes::joypad::Joypad) -> nes::nes::Shutdown {
-    nes::nes::Shutdown::No
+  fn poll_events(&mut self, _joypad: &mut nes::joypad::Joypad) -> nes::nes::HostEvent {
+    nes::nes::HostEvent::Nothing
   }
 }
 
