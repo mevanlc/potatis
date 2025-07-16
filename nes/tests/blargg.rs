@@ -1,7 +1,5 @@
 use mos6502::memory::Bus;
-use nes::nes::Nes;
-
-mod common;
+use nes::{cartridge::Cartridge, nes::Nes};
 
 const STATUS_RUNNING: u8 = 0x80;
 const STATUS_NEEDS_RESET: u8 = 0x81;
@@ -113,10 +111,11 @@ fn ppu_read_buffer() {
 }
 
 fn run_blargg_test(test: &str, pass_condition: PassCond) {
-  let path = format!("../test-roms/nes-test-roms/{}", test);
-  let mut nes = common::setup(path.into(), std::env::var("VERBOSE").is_ok());
+  let cartridge = Cartridge::blow_dust(format!("../test-roms/nes-test-roms/{}", test).into())
+    .expect("failed to map rom");
+  let mut nes = Nes::insert_headless_host(cartridge);
 
-  nes.debugger().verbose(true);
+  nes.debugger().verbose(std::env::var("VERBOSE").is_ok());
 
   let result: String;
   let mut status: Option<u8> = None;
