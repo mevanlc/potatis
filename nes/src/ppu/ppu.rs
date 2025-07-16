@@ -313,34 +313,34 @@ impl Ppu {
       virtual_y -= 240;
     }
 
-    let vertical_tile: u16 = virtual_y / 8;
-    let horizontal_tile: u16 = virtual_x / 8;
+    let vertical_tile: u16 = virtual_y >> 3; // Optimized: division by 8
+    let horizontal_tile: u16 = virtual_x >> 3; // Optimized: division by 8
 
     let nametable_offset = vertical_tile * 32 + horizontal_tile;
     let nametable_entry = self
       .vram
       .read_indexed(virtual_nametable_index, nametable_offset);
 
-    let vertical_attr = vertical_tile / 4;
-    let horizontal_attr = horizontal_tile / 4;
+    let vertical_attr = vertical_tile >> 2; // Optimized: division by 4
+    let horizontal_attr = horizontal_tile >> 2; // Optimized: division by 4
 
     let attr_offset = 0x3c0 + vertical_attr * 8 + horizontal_attr;
     let attr = self.vram.read_indexed(virtual_nametable_index, attr_offset);
 
-    let horizontal_box_pos = (horizontal_tile % 4) / 2;
-    let vertical_box_pos = (vertical_tile % 4) / 2;
+    let horizontal_box_pos = (horizontal_tile & 3) >> 1; // Optimized: modulo 4, then division by 2
+    let vertical_box_pos = (vertical_tile & 3) >> 1; // Optimized: modulo 4, then division by 2
 
     let color_bits = (attr >> ((horizontal_box_pos * 2) + (vertical_box_pos * 4))) & 0x3;
 
     let first_plane_byte = self.read_chr_rom(
-      self.background_table_address + (nametable_entry as u16 * 0x10 + virtual_y % 8),
+      self.background_table_address + (nametable_entry as u16 * 0x10 + (virtual_y & 7)), // Optimized: modulo 8
     );
     let second_plane_byte = self.read_chr_rom(
-      self.background_table_address + (nametable_entry as u16 * 0x10 + (virtual_y % 8) + 8),
+      self.background_table_address + (nametable_entry as u16 * 0x10 + (virtual_y & 7) + 8), // Optimized: modulo 8
     );
 
-    let first_plane_bit = first_plane_byte >> (7 - virtual_x % 8) & 0x1;
-    let second_plane_bit = second_plane_byte >> (7 - virtual_x % 8) & 0x1;
+    let first_plane_bit = first_plane_byte >> (7 - (virtual_x & 7)) & 0x1; // Optimized: modulo 8
+    let second_plane_bit = second_plane_byte >> (7 - (virtual_x & 7)) & 0x1; // Optimized: modulo 8
 
     if first_plane_bit == 0 && second_plane_bit == 0 {
       // Transparent
