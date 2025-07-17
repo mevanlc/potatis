@@ -332,12 +332,14 @@ impl Ppu {
 
     let color_bits = (attr >> ((horizontal_box_pos * 2) + (vertical_box_pos * 4))) & 0x3;
 
-    let first_plane_byte = self.read_chr_rom(
+    let chr_mapper = self.rom_mapper.borrow();
+    let first_plane_byte = chr_mapper.read8(
       self.background_table_address + (nametable_entry as u16 * 0x10 + (virtual_y & 7)), // Optimized: modulo 8
     );
-    let second_plane_byte = self.read_chr_rom(
+    let second_plane_byte = chr_mapper.read8(
       self.background_table_address + (nametable_entry as u16 * 0x10 + (virtual_y & 7) + 8), // Optimized: modulo 8
     );
+    drop(chr_mapper);
 
     let first_plane_bit = first_plane_byte >> (7 - (virtual_x & 7)) & 0x1; // Optimized: modulo 8
     let second_plane_bit = second_plane_byte >> (7 - (virtual_x & 7)) & 0x1; // Optimized: modulo 8
@@ -435,8 +437,10 @@ impl Ppu {
         };
 
         let address = sprite_table + index;
-        let first_plane = self.read_chr_rom(address);
-        let second_plane = self.read_chr_rom(address + 8);
+        let chr_mapper = self.rom_mapper.borrow();
+        let first_plane = chr_mapper.read8(address);
+        let second_plane = chr_mapper.read8(address + 8);
+        drop(chr_mapper);
 
         // Read pixels for sprite row
         let mut pixels = [0u8; 8];

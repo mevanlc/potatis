@@ -499,8 +499,12 @@ impl<B: Bus> Cpu<B> {
   }
 
   fn flags_set_neg_zero(&mut self, res: u8) {
-    self.flags.set(Flag::Z, res == 0);
-    self.flags.set(Flag::N, res & (1 << 7) != 0);
+    // Optimized direct bit manipulation instead of bitflags::set
+    let mut bits = self.flags.bits();
+    bits &= !(Flag::Z.bits() | Flag::N.bits());
+    bits |= if res == 0 { Flag::Z.bits() } else { 0 };
+    bits |= res & 0x80;
+    self.flags = Flag::from_bits_truncate(bits);
   }
 
   fn cmp(&mut self, reg: usize, val: u8) {
