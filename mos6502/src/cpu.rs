@@ -57,7 +57,15 @@ impl<B: Bus> Cpu<B> {
     self.extra_cycles = 0;
     let opbyte = self.bus.read8(self.pc);
     let inst = Instruction::disassemble(opbyte);
-    let operands = (self.bus.read8(self.pc + 1), self.bus.read8(self.pc + 2));
+
+    // Only read operands based on instruction size to avoid unnecessary bus reads
+    let operands = match inst.size {
+      1 => (0, 0),                           // 1-byte instruction (implied) - no operands
+      2 => (self.bus.read8(self.pc + 1), 0), // 2-byte instruction - only read first operand
+      3 => (self.bus.read8(self.pc + 1), self.bus.read8(self.pc + 2)), // 3-byte instruction - read both operands
+      _ => panic!(),
+    };
+
     (inst, operands)
   }
 
