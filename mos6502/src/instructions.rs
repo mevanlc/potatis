@@ -1,5 +1,4 @@
 use core::panic;
-use std::sync::LazyLock;
 
 use crate::cpu::{Cpu, X, Y};
 use crate::memory::Bus;
@@ -120,7 +119,7 @@ const NOP_2_4: Instruction = Instruction::two(Opcode::NOP, 4, AddressMode::Nop);
 const NOP_3_4: Instruction = Instruction::thr(Opcode::NOP, 4, AddressMode::Nop);
 const NOP_3_A: Instruction = Instruction::thr(Opcode::NOP, 4, AddressMode::AbsX);
 
-static INSTRUCTIONS: LazyLock<[Instruction; 256]> = LazyLock::new(|| {
+static INSTRUCTIONS: [Instruction; 256] = {
   let mut i = [UNINIT; 256];
 
   i[0x02] = JAM;
@@ -415,7 +414,7 @@ static INSTRUCTIONS: LazyLock<[Instruction; 256]> = LazyLock::new(|| {
   i[0xfc] = NOP_3_A;
 
   i
-});
+};
 
 impl Instruction {
   pub const fn imp(opcode: Opcode, cycles: usize) -> Self {
