@@ -6,3 +6,4 @@ Cargo.lock
 dhat*.json
 profile*.json
 node_modules
+profile.trace/

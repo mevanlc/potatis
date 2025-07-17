@@ -1,12 +1,9 @@
-#![cfg_attr(not(feature = "profile_cpu_std"), no_std)]
-
 extern crate alloc;
 use alloc::vec::Vec;
 
 use nes::cartridge::Cartridge;
 use nes::nes::Nes;
 
-#[cfg(feature = "profile_heap")]
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
@@ -38,17 +35,13 @@ impl nes::nes::HostPlatform for FakeHost {
 
 #[allow(unreachable_code)]
 fn main() {
-  #[cfg(debug_assertions)]
-  panic!("run profile with --release");
-
-  #[cfg(feature = "profile_heap")]
   let _profiler = dhat::Profiler::new_heap();
 
   let rom = include_bytes!(env!("PROF_ROM"));
   let cart = Cartridge::blow_dust_no_heap(rom).unwrap();
   let mut nes = Nes::insert(cart, FakeHost {});
 
-  for _ in 0..10_000_000 {
+  for _ in 0..10_000_0000 {
     nes.tick();
   }
 }
