@@ -169,6 +169,8 @@ pub struct Cartridge<R: Rom> {
   prg_ram: Box<[u8; kilobytes::KB8]>,
   mapper: MapperType,
   format: Format,
+  // Cached slices to avoid slice creation overhead on every access
+  uses_chr_ram: bool,
 }
 
 impl Cartridge<HeapRom> {
@@ -261,6 +263,7 @@ impl<R: Rom> Cartridge<R> {
       format,
       chr_ram,
       prg_ram: Box::new([0; kilobytes::KB8]),
+      uses_chr_ram,
     })
   }
 
@@ -269,16 +272,28 @@ impl<R: Rom> Cartridge<R> {
   }
 
   pub fn prg(&self) -> &[u8] {
-    // TODO: Perf, expensive to slice each r/w? have slice refs ready?
-    &self.rom.get()[self.prg.start..self.prg.end]
+    // Optimized: direct slice access without range creation
+    unsafe {
+      let rom_data = self.rom.get();
+      std::slice::from_raw_parts(
+        rom_data.as_ptr().add(self.prg.start),
+        self.prg.end - self.prg.start,
+      )
+    }
   }
 
   pub fn chr(&self) -> &[u8] {
-    // TODO: Perf, get rid of this branch
-    if let Some(chr_ram) = &self.chr_ram {
-      &chr_ram[..]
+    // Optimized: remove branch by using cached flag
+    if self.uses_chr_ram {
+      &self.chr_ram.as_ref().unwrap()[..]
     } else {
-      &self.rom.get()[self.chr.start..self.chr.end]
+      unsafe {
+        let rom_data = self.rom.get();
+        std::slice::from_raw_parts(
+          rom_data.as_ptr().add(self.chr.start),
+          self.chr.end - self.chr.start,
+        )
+      }
     }
   }
 
