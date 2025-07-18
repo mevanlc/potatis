@@ -264,7 +264,7 @@ impl Cartridge {
     // Optimized: direct slice access without range creation
     unsafe {
       let rom_data = self.rom.get();
-      std::slice::from_raw_parts(
+      alloc::slice::from_raw_parts(
         rom_data.as_ptr().add(self.prg.start),
         self.prg.end - self.prg.start,
       )
@@ -278,7 +278,7 @@ impl Cartridge {
     } else {
       unsafe {
         let rom_data = self.rom.get();
-        std::slice::from_raw_parts(
+        alloc::slice::from_raw_parts(
           rom_data.as_ptr().add(self.chr.start),
           self.chr.end - self.chr.start,
         )

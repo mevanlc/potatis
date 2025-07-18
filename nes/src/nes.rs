@@ -10,8 +10,10 @@ use mos6502::cpu::Y;
 use mos6502::cpu::Cpu;
 #[cfg(feature = "debugger")]
 use mos6502::debugger::AttachedDebugger;
+use mos6502::memory::Bus;
 use mos6502::mos6502::Mos6502;
 
+use crate::apu::Apu;
 use crate::cartridge::Cartridge;
 use crate::fonts;
 use crate::frame::PixelFormatRGB565;
@@ -76,6 +78,10 @@ pub trait HostPlatform {
       HostPixelFormat::Rgb565 => RenderFrame::new::<PixelFormatRGB565>(),
     }
   }
+
+  fn audio_sample(&mut self, _sample: f32) {
+    // Not required. Up to platform to implement audio output.
+  }
 }
 
 #[derive(Default)]
@@ -94,6 +100,7 @@ impl HostPlatform for HeadlessHost {
 pub struct Nes<H: HostPlatform + 'static> {
   machine: Mos6502<NesBus>,
   ppu: Rc<RefCell<Ppu>>,
+  apu: Rc<RefCell<Apu>>,
   host: H,
   joypad: Rc<RefCell<Joypad>>,
   timing: FrameTiming,
@@ -109,8 +116,9 @@ impl<H: HostPlatform + 'static> Nes<H> {
 
     let frame = host.alloc_render_frame();
     let ppu = Rc::new(RefCell::new(Ppu::new(rom_mapper.clone(), mirroring, frame)));
+    let apu = Rc::new(RefCell::new(Apu::new()));
     let joypad = Rc::new(RefCell::new(Joypad::default()));
-    let bus = NesBus::new(rom_mapper.clone(), ppu.clone(), joypad.clone());
+    let bus = NesBus::new(rom_mapper.clone(), ppu.clone(), apu.clone(), joypad.clone());
 
     let mut cpu = Cpu::new(bus);
     cpu.reset();
@@ -120,6 +128,7 @@ impl<H: HostPlatform + 'static> Nes<H> {
     Self {
       machine,
       ppu,
+      apu,
       host,
       joypad,
       timing: FrameTiming::new(),
@@ -131,6 +140,29 @@ impl<H: HostPlatform + 'static> Nes<H> {
 
   pub fn tick(&mut self) {
     let cpu_cycles = self.machine.tick();
+
+    let apu_irq_pending = {
+      // Tick APU for each CPU cycle and generate samples at correct rate
+      let mut apu = self.apu.borrow_mut();
+      for _ in 0..cpu_cycles {
+        apu.tick();
+        
+        // Check if we should generate a sample after each APU tick
+        if apu.should_generate_sample() {
+          let audio_sample = apu.output();
+          self.host.audio_sample(audio_sample);
+        }
+      }
+
+      // Handle DMC memory requests
+      let dmc_requests = apu.get_dmc_memory_requests();
+      for address in dmc_requests {
+        let byte = self.bus().read8(address);
+        apu.provide_dmc_sample(byte);
+      }
+
+      apu.irq_pending()
+    };
 
     let (ppu_event, should_trigger_nmi) = {
       let mut ppu = self.ppu.borrow_mut();
@@ -172,7 +204,7 @@ impl<H: HostPlatform + 'static> Nes<H> {
       }
     }
 
-    if ppu_event == TickEvent::TriggerIrq {
+    if ppu_event == TickEvent::TriggerIrq || apu_irq_pending {
       self.machine.cpu.irq();
     }
   }

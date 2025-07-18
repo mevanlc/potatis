@@ -6,6 +6,7 @@ use nes::joypad::JoypadButton;
 use nes::joypad::JoypadEvent;
 use nes::nes::HostEvent;
 use nes::nes::{EmulationSpeed, HostPlatform};
+use sdl2::audio::{AudioCallback, AudioDevice, AudioSpecDesired};
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::PixelFormatEnum;
@@ -15,6 +16,31 @@ use sdl2::render::TextureCreator;
 use sdl2::video::Window;
 use sdl2::video::WindowContext;
 use sdl2::Sdl;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
+
+type AudioBuffer = Arc<Mutex<VecDeque<f32>>>;
+
+struct AudioCallbackData {
+  buffer: AudioBuffer,
+}
+
+impl AudioCallback for AudioCallbackData {
+  type Channel = f32;
+
+  fn callback(&mut self, out: &mut [f32]) {
+    if let Ok(mut buffer) = self.buffer.lock() {
+      for sample in out.iter_mut() {
+        *sample = buffer.pop_front().unwrap_or(0.0);
+      }
+    } else {
+      // If we can't lock, just output silence
+      for sample in out.iter_mut() {
+        *sample = 0.0;
+      }
+    }
+  }
+}
 
 pub struct SdlHostPlatform<'a> {
   context: Sdl,
@@ -23,12 +49,16 @@ pub struct SdlHostPlatform<'a> {
   _creator: TextureCreator<WindowContext>,
   time: Instant,
   vsync_enabled: bool,
+  _audio_device: AudioDevice<AudioCallbackData>,
+  audio_buffer: AudioBuffer,
 }
 
 impl SdlHostPlatform<'_> {
   pub fn new() -> Self {
     let sdl_context = sdl2::init().unwrap();
     let (canvas, texture, creator) = Self::create_canvas(&sdl_context, true);
+    let (audio_device, audio_buffer) = Self::create_audio(&sdl_context);
+
     Self {
       _creator: creator,
       context: sdl_context,
@@ -36,6 +66,8 @@ impl SdlHostPlatform<'_> {
       texture,
       time: Instant::now(),
       vsync_enabled: true,
+      _audio_device: audio_device,
+      audio_buffer,
     }
   }
 
@@ -84,6 +116,32 @@ impl SdlHostPlatform<'_> {
     };
 
     (canvas, texture, creator)
+  }
+
+  fn create_audio(sdl_context: &Sdl) -> (AudioDevice<AudioCallbackData>, AudioBuffer) {
+    let audio_subsystem = sdl_context.audio().unwrap();
+
+    let desired_spec = AudioSpecDesired {
+      freq: Some(44100),
+      channels: Some(1),   // Mono
+      samples: Some(1024), // Smaller buffer for lower latency
+    };
+
+    let audio_buffer = Arc::new(Mutex::new(VecDeque::new()));
+    let callback_data = AudioCallbackData {
+      buffer: audio_buffer.clone(),
+    };
+
+    let audio_device = audio_subsystem
+      .open_playback(None, &desired_spec, |spec| {
+        println!("Audio spec: {:?}", spec);
+        callback_data
+      })
+      .unwrap();
+
+    audio_device.resume();
+
+    (audio_device, audio_buffer)
   }
 }
 
@@ -172,6 +230,17 @@ impl HostPlatform for SdlHostPlatform<'_> {
 
   fn delay(&self, d: std::time::Duration) {
     std::thread::sleep(d)
+  }
+
+  fn audio_sample(&mut self, sample: f32) {
+    if let Ok(mut buffer) = self.audio_buffer.lock() {
+      // Keep buffer size reasonable to prevent latency but don't drop samples
+      if buffer.len() > 8820 {
+        // ~0.2 seconds at 44.1kHz - remove oldest sample to make room
+        buffer.pop_front();
+      }
+      buffer.push_back(sample);
+    }
   }
 }
 

@@ -4,6 +4,7 @@ use core::cell::RefCell;
 use common::kilobytes;
 use mos6502::memory::Bus;
 
+use crate::apu::Apu;
 use crate::joypad::Joypad;
 use crate::mappers::Mapper;
 use crate::ppu::ppu::Ppu;
@@ -12,6 +13,7 @@ pub struct NesBus {
   ram: [u8; kilobytes::KB2],
   rom: Rc<RefCell<Mapper>>,
   ppu: Rc<RefCell<Ppu>>,
+  apu: Rc<RefCell<Apu>>,
   joypad: Rc<RefCell<Joypad>>,
 }
 
@@ -30,14 +32,20 @@ impl NesBus {
   pub fn new(
     rom: Rc<RefCell<Mapper>>,
     ppu: Rc<RefCell<Ppu>>,
+    apu: Rc<RefCell<Apu>>,
     joypad: Rc<RefCell<Joypad>>,
   ) -> Self {
     Self {
       rom,
       ram: [0; kilobytes::KB2],
       ppu,
+      apu,
       joypad,
     }
+  }
+
+  pub fn apu(&self) -> &Rc<RefCell<Apu>> {
+    &self.apu
   }
 
   fn map(&self, address: u16) -> (MappedDevice, u16) {
@@ -61,7 +69,7 @@ impl Bus for NesBus {
     match device {
       MappedDevice::Ram => self.ram[mapped_address as usize],
       MappedDevice::Ppu => self.ppu.borrow_mut().cpu_read_register(mapped_address),
-      MappedDevice::Apu => 0,
+      MappedDevice::Apu => self.apu.borrow_mut().read(mapped_address),
       MappedDevice::PpuOamDma => 0,
       MappedDevice::Joypad => {
         match address {
@@ -84,7 +92,7 @@ impl Bus for NesBus {
         .ppu
         .borrow_mut()
         .cpu_write_register(val, mapped_address),
-      MappedDevice::Apu => (),
+      MappedDevice::Apu => self.apu.borrow_mut().write(mapped_address, val),
       MappedDevice::PpuOamDma => {
         // Dump CPU page XX00..XXFF to PPU OAM
         let page_start = (val as u16) << 8;
@@ -95,7 +103,7 @@ impl Bus for NesBus {
       MappedDevice::Joypad => {
         match address {
           0x4016 => self.joypad.borrow_mut().strobe(val), // Joystick strobe
-          0x4017 => (),                                   // APU Frame counter control
+          0x4017 => self.apu.borrow_mut().write(0x17, val), // APU Frame counter control
           _ => unreachable!(),
         }
       }
@@ -124,6 +132,7 @@ mod tests {
     NesBus::new(
       mapper.clone(),
       Rc::new(RefCell::new(Ppu::new(mapper, Mirroring::Horizontal, frame))),
+      Rc::new(RefCell::new(crate::apu::Apu::new())),
       Rc::new(RefCell::new(joypad)),
     )
   }

@@ -41,7 +41,7 @@ fn main() {
   let cart = Cartridge::blow_dust_no_heap(rom).unwrap();
   let mut nes = Nes::insert(cart, FakeHost {});
 
-  for _ in 0..10_000_0000 {
+  for _ in 0..10_000_00 {
     nes.tick();
   }
 }

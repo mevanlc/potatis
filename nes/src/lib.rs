@@ -5,6 +5,7 @@ extern crate alloc;
 
 pub use mos6502;
 
+mod apu;
 mod fonts;
 mod mappers;
 mod nesbus;
