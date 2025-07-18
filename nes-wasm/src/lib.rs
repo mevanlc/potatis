@@ -128,7 +128,7 @@ impl WasmHostPlatform {
 
 #[wasm_bindgen]
 pub struct NesWasm {
-  nes: Nes,
+  nes: Nes<WasmHostPlatform>,
 }
 
 #[wasm_bindgen]

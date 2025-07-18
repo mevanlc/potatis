@@ -65,7 +65,7 @@ pub extern "C" fn Java_nes_potatis_Rust_init(
 #[no_mangle]
 pub extern "C" fn Java_nes_potatis_Rust_tick(_: JNIEnv, _: JClass, ptr: jlong) {
   unsafe {
-    let nes = &mut *(ptr as *mut Nes);
+    let nes = &mut *(ptr as *mut Nes<AndroidHost>);
     nes.tick()
   }
 }
@@ -73,7 +73,7 @@ pub extern "C" fn Java_nes_potatis_Rust_tick(_: JNIEnv, _: JClass, ptr: jlong) {
 #[no_mangle]
 pub extern "C" fn Java_nes_potatis_Rust_destroy(_: JNIEnv, _: JClass, ptr: jlong) {
   unsafe {
-    let _ = Box::from_raw(ptr as *mut Nes);
+    let _ = Box::from_raw(ptr as *mut Nes<AndroidHost>);
     // dropped
   }
 }

@@ -1,4 +1,3 @@
-use alloc::boxed::Box;
 use alloc::rc::Rc;
 use alloc::string::ToString;
 use core::cell::RefCell;
@@ -81,7 +80,7 @@ pub trait HostPlatform {
 }
 
 #[derive(Default)]
-struct HeadlessHost;
+pub struct HeadlessHost;
 impl HostPlatform for HeadlessHost {
   fn render(&mut self, _: &RenderFrame) {}
   fn poll_events(&mut self, _: &mut Joypad) -> HostEvent {
@@ -93,10 +92,10 @@ impl HostPlatform for HeadlessHost {
   fn delay(&self, _: Duration) {}
 }
 
-pub struct Nes {
+pub struct Nes<H: HostPlatform + 'static> {
   machine: Mos6502<NesBus>,
   ppu: Rc<RefCell<Ppu>>,
-  host: Box<dyn HostPlatform>,
+  host: H,
   joypad: Rc<RefCell<Joypad>>,
   timing: FrameTiming,
   show_fps: bool,
@@ -104,11 +103,8 @@ pub struct Nes {
   emulation_speed: EmulationSpeed,
 }
 
-impl Nes {
-  pub fn insert<H: HostPlatform + 'static, R: Rom + 'static>(
-    cartridge: Cartridge<R>,
-    host: H,
-  ) -> Self {
+impl<H: HostPlatform + 'static> Nes<H> {
+  pub fn insert<R: Rom + 'static>(cartridge: Cartridge<R>, host: H) -> Self {
     let mirroring = cartridge.mirroring();
     let rom_mapper = crate::mappers::for_cart(cartridge);
 
@@ -125,17 +121,13 @@ impl Nes {
     Self {
       machine,
       ppu,
-      host: Box::new(host),
+      host,
       joypad,
       timing: FrameTiming::new(),
       shutdown: false,
       show_fps: false,
       emulation_speed: EmulationSpeed::Normal,
     }
-  }
-
-  pub fn insert_headless_host<R: Rom + 'static>(cartridge: Cartridge<R>) -> Self {
-    Self::insert(cartridge, HeadlessHost)
   }
 
   pub fn tick(&mut self) {
@@ -316,7 +308,7 @@ impl FrameTiming {
 }
 
 // mainly for nestest
-impl core::fmt::Debug for Nes {
+impl<H: HostPlatform> core::fmt::Debug for Nes<H> {
   // A:00 X:00 Y:00 P:26 SP:FB PPU:  0,120 CYC:40
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     let c = self.cpu();

@@ -6,6 +6,7 @@ use std::io::BufReader;
 use mos6502::cpu::Flag;
 use mos6502::cpu::SP;
 use nes::cartridge::Cartridge;
+use nes::nes::HeadlessHost;
 use nes::nes::Nes;
 
 // cat nes/roms/nestest.log | awk '{print substr(,49)}' > nes/roms/nestest_cycles.log
@@ -26,7 +27,7 @@ const ENABLE_TEST_CYCLES: bool = false;
 fn nestest() {
   let cartridge =
     Cartridge::blow_dust("../test-roms/nestest/nestest.nes".into()).expect("failed to map rom");
-  let mut nes = Nes::insert_headless_host(cartridge);
+  let mut nes = Nes::insert(cartridge, HeadlessHost);
 
   let logf =
     File::open("../test-roms/nestest/nestest_cycles.log").expect("failed to read test log");
