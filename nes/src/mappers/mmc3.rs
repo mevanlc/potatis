@@ -4,10 +4,9 @@ use core::panic;
 use common::kilobytes;
 use mos6502::memory::Bus;
 
-use super::Mapper;
+use super::MapperImpl;
 use crate::cartridge::Cartridge;
 use crate::cartridge::Mirroring;
-use crate::cartridge::Rom;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum PrgBankMode {
@@ -21,8 +20,8 @@ enum ChrBankMode {
   TwoKbAt1000_1 = 1,
 }
 
-pub struct MMC3<R: Rom> {
-  cart: Cartridge<R>,
+pub struct MMC3 {
+  cart: Cartridge,
 
   prg_rom_banks_total: usize,
   prg_rom_bank_mode: PrgBankMode,
@@ -39,8 +38,8 @@ pub struct MMC3<R: Rom> {
   irq_reload: bool,
 }
 
-impl<R: Rom> MMC3<R> {
-  pub fn new(cart: Cartridge<R>) -> Self {
+impl MMC3 {
+  pub fn new(cart: Cartridge) -> Self {
     Self {
       prg_rom_banks_total: cart.prg().len() / kilobytes::KB8,
       cart,
@@ -108,7 +107,7 @@ impl<R: Rom> MMC3<R> {
   }
 }
 
-impl<R: Rom> Mapper for MMC3<R> {
+impl MapperImpl for MMC3 {
   fn on_runtime_mirroring(&mut self, cb: Box<dyn FnMut(&Mirroring)>) {
     self.mirroring_cb = Some(cb);
   }
@@ -130,7 +129,7 @@ impl<R: Rom> Mapper for MMC3<R> {
   }
 }
 
-impl<R: Rom> Bus for MMC3<R> {
+impl Bus for MMC3 {
   fn read8(&self, address: u16) -> u8 {
     // println!("Read: {:#06x}", address);
     match address {

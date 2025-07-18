@@ -5,7 +5,7 @@ use core::cell::RefCell;
 use common::kilobytes;
 
 use crate::cartridge::Mirroring;
-use crate::mappers::Mapper;
+use crate::mappers::{Mapper, MapperImpl};
 
 pub(crate) struct Vram {
   nametables: [[u8; kilobytes::KB1]; 2], // AKA CIRAM
@@ -13,7 +13,7 @@ pub(crate) struct Vram {
 }
 
 impl Vram {
-  pub fn new(mapper: Rc<RefCell<dyn Mapper>>, cart_mirroring: Mirroring) -> Self {
+  pub fn new(mapper: Rc<RefCell<Mapper>>, cart_mirroring: Mirroring) -> Self {
     let mirror_map = Self::setup_mirror_map(&cart_mirroring);
     let mirror_map = Rc::new(RefCell::new(mirror_map));
 

@@ -3,19 +3,18 @@ use core::panic;
 use common::kilobytes;
 use mos6502::memory::Bus;
 
-use super::Mapper;
+use super::MapperImpl;
 use crate::cartridge::Cartridge;
-use crate::cartridge::Rom;
 
-pub struct NROM<R: Rom> {
-  cart: Cartridge<R>,
+pub struct NROM {
+  cart: Cartridge,
   is_16kb: bool,
 }
 
-impl<R: Rom> Mapper for NROM<R> {}
+impl MapperImpl for NROM {}
 
-impl<R: Rom> NROM<R> {
-  pub fn new(cart: Cartridge<R>) -> Self {
+impl NROM {
+  pub fn new(cart: Cartridge) -> Self {
     let is_16kb = match cart.prg().len() {
       kilobytes::KB16 => true,
       kilobytes::KB32 => false,
@@ -25,7 +24,7 @@ impl<R: Rom> NROM<R> {
   }
 }
 
-impl<R: Rom> Bus for NROM<R> {
+impl Bus for NROM {
   fn read8(&self, address: u16) -> u8 {
     match address {
       0x0000..=0x1fff => self.cart.chr()[address as usize], // PPU

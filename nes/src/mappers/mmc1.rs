@@ -4,10 +4,9 @@ use alloc::boxed::Box;
 use common::kilobytes;
 use mos6502::memory::Bus;
 
-use super::Mapper;
+use super::MapperImpl;
 use crate::cartridge::Cartridge;
 use crate::cartridge::Mirroring;
-use crate::cartridge::Rom;
 
 #[derive(Debug, PartialEq, Eq)]
 enum PrgBankMode {
@@ -33,8 +32,8 @@ enum ChrBankMode {
   SwitchTwo4KbBanks,
 }
 
-pub struct MMC1<R: Rom> {
-  cart: Cartridge<R>,
+pub struct MMC1 {
+  cart: Cartridge,
 
   prg_rom_bank_mode: PrgBankMode,
   prg_rom_bank_num: usize,
@@ -49,14 +48,14 @@ pub struct MMC1<R: Rom> {
   shift_register: u8,
 }
 
-impl<R: Rom> Mapper for MMC1<R> {
+impl MapperImpl for MMC1 {
   fn on_runtime_mirroring(&mut self, cb: Box<dyn FnMut(&Mirroring)>) {
     self.mirroring_cb = Some(cb);
   }
 }
 
-impl<R: Rom> MMC1<R> {
-  pub fn new(cart: Cartridge<R>) -> Self {
+impl MMC1 {
+  pub fn new(cart: Cartridge) -> Self {
     MMC1 {
       prg_rom_bank_num: cart.prg().len() / kilobytes::KB16,
       cart,
@@ -198,7 +197,7 @@ impl<R: Rom> MMC1<R> {
   }
 }
 
-impl<R: Rom> Bus for MMC1<R> {
+impl Bus for MMC1 {
   fn read8(&self, address: u16) -> u8 {
     // println!("Read: {:#06x}", address);
     match address {

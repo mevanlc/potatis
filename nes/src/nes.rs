@@ -13,7 +13,6 @@ use mos6502::debugger::AttachedDebugger;
 use mos6502::mos6502::Mos6502;
 
 use crate::cartridge::Cartridge;
-use crate::cartridge::Rom;
 use crate::fonts;
 use crate::frame::PixelFormatRGB565;
 use crate::frame::PixelFormatRGB888;
@@ -104,7 +103,7 @@ pub struct Nes<H: HostPlatform + 'static> {
 }
 
 impl<H: HostPlatform + 'static> Nes<H> {
-  pub fn insert<R: Rom + 'static>(cartridge: Cartridge<R>, host: H) -> Self {
+  pub fn insert(cartridge: Cartridge, host: H) -> Self {
     let mirroring = cartridge.mirroring();
     let rom_mapper = crate::mappers::for_cart(cartridge);
 

@@ -10,7 +10,7 @@ use crate::ppu::ppu::Ppu;
 
 pub struct NesBus {
   ram: [u8; kilobytes::KB2],
-  rom: Rc<RefCell<dyn Mapper>>,
+  rom: Rc<RefCell<Mapper>>,
   ppu: Rc<RefCell<Ppu>>,
   joypad: Rc<RefCell<Joypad>>,
 }
@@ -28,7 +28,7 @@ enum MappedDevice {
 
 impl NesBus {
   pub fn new(
-    rom: Rc<RefCell<dyn Mapper>>,
+    rom: Rc<RefCell<Mapper>>,
     ppu: Rc<RefCell<Ppu>>,
     joypad: Rc<RefCell<Joypad>>,
   ) -> Self {
@@ -108,31 +108,22 @@ impl Bus for NesBus {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::cartridge::Mirroring;
+  use crate::cartridge::{Cartridge, Mirroring, Rom};
   use crate::frame::PixelFormatRGB888;
   use crate::frame::RenderFrame;
 
-  struct TestBus {}
-
-  impl Mapper for TestBus {}
-
-  impl Bus for TestBus {
-    fn read8(&self, _: u16) -> u8 {
-      todo!()
-    }
-
-    fn write8(&mut self, _: u8, _: u16) {
-      todo!()
-    }
-  }
-
   fn sut() -> NesBus {
-    let bus = Rc::new(RefCell::new(TestBus {}));
+    // Create a minimal test cartridge
+    let test_rom_data = [0x4e, 0x45, 0x53, 0x1a, 0x02, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+      .iter().chain([0u8; 32768].iter()).cloned().collect::<Vec<u8>>();
+    let test_cart = Cartridge::load(Rom::Heap(test_rom_data)).unwrap();
+    let mapper = crate::mappers::for_cart(test_cart);
+    
     let joypad = Joypad::default();
     let frame = RenderFrame::new::<PixelFormatRGB888>();
     NesBus::new(
-      bus.clone(),
-      Rc::new(RefCell::new(Ppu::new(bus, Mirroring::Horizontal, frame))),
+      mapper.clone(),
+      Rc::new(RefCell::new(Ppu::new(mapper, Mirroring::Horizontal, frame))),
       Rc::new(RefCell::new(joypad)),
     )
   }

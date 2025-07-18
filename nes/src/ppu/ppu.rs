@@ -2,12 +2,14 @@ use alloc::rc::Rc;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 
+use mos6502::memory::Bus;
+
 use super::palette::Palette;
 use super::state::State;
 use super::vram::Vram;
 use crate::cartridge::Mirroring;
 use crate::frame::RenderFrame;
-use crate::mappers::Mapper;
+use crate::mappers::{Mapper, MapperImpl};
 use crate::ppu::state::Phase;
 use crate::ppu::state::Rendering;
 
@@ -50,7 +52,7 @@ pub enum TickEvent {
 #[allow(dead_code)]
 pub struct Ppu {
   vram: Vram,
-  rom_mapper: Rc<RefCell<dyn Mapper>>,
+  rom_mapper: Rc<RefCell<Mapper>>,
   palette: Palette,
   frame: RenderFrame,
   state: State,
@@ -86,7 +88,7 @@ pub struct Ppu {
 #[allow(dead_code)]
 impl Ppu {
   pub fn new(
-    mapper: Rc<RefCell<dyn Mapper>>,
+    mapper: Rc<RefCell<Mapper>>,
     cart_mirroring: Mirroring,
     frame: RenderFrame,
   ) -> Ppu {

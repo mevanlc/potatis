@@ -1,20 +1,19 @@
 use common::kilobytes;
 use mos6502::memory::Bus;
 
-use super::Mapper;
+use super::MapperImpl;
 use crate::cartridge::Cartridge;
-use crate::cartridge::Rom;
 
-pub struct UxROM<R: Rom> {
-  cart: Cartridge<R>,
+pub struct UxROM {
+  cart: Cartridge,
   bank: u8,
   num_banks: usize,
 }
 
-impl<R: Rom> Mapper for UxROM<R> {}
+impl MapperImpl for UxROM {}
 
-impl<R: Rom> UxROM<R> {
-  pub fn new(cart: Cartridge<R>) -> Self {
+impl UxROM {
+  pub fn new(cart: Cartridge) -> Self {
     Self {
       num_banks: cart.prg().len() / kilobytes::KB16,
       cart,
@@ -23,7 +22,7 @@ impl<R: Rom> UxROM<R> {
   }
 }
 
-impl<R: Rom> Bus for UxROM<R> {
+impl Bus for UxROM {
   fn read8(&self, address: u16) -> u8 {
     let address = address as usize;
     let selected_bank = self.bank as usize;

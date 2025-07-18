@@ -1,23 +1,22 @@
 use common::kilobytes;
 use mos6502::memory::Bus;
 
-use super::Mapper;
+use super::MapperImpl;
 use crate::cartridge::Cartridge;
-use crate::cartridge::Rom;
 
 const BANK_SIZE: usize = kilobytes::KB8;
 
 // Mapper 3
-pub(crate) struct CNROM<R: Rom> {
-  cart: Cartridge<R>,
+pub struct CNROM {
+  cart: Cartridge,
   selected_bank: usize,
   is_16kb: bool,
 }
 
-impl<R: Rom> Mapper for CNROM<R> {}
+impl MapperImpl for CNROM {}
 
-impl<R: Rom> CNROM<R> {
-  pub fn new(cart: Cartridge<R>) -> Self {
+impl CNROM {
+  pub fn new(cart: Cartridge) -> Self {
     let is_16kb = match cart.prg().len() {
       kilobytes::KB16 => true,
       kilobytes::KB32 => false,
@@ -32,7 +31,7 @@ impl<R: Rom> CNROM<R> {
   }
 }
 
-impl<R: Rom> Bus for CNROM<R> {
+impl Bus for CNROM {
   fn read8(&self, address: u16) -> u8 {
     match address {
       0x0000..=0x1fff => self.cart.chr()[(self.selected_bank * BANK_SIZE) + address as usize],

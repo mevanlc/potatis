@@ -128,38 +128,31 @@ pub enum Mirroring {
   SingleScreenLower,
 }
 
-pub trait Rom {
-  fn len(&self) -> usize;
-  fn get(&self) -> &[u8];
+#[derive(PartialEq, Eq)]
+pub enum Rom {
+  Heap(Vec<u8>),
+  Embedded(&'static [u8]),
 }
 
-pub struct HeapRom(Vec<u8>);
-
-impl Rom for HeapRom {
-  fn len(&self) -> usize {
-    self.0.len()
+impl Rom {
+  pub fn len(&self) -> usize {
+    match self {
+      Rom::Heap(v) => v.len(),
+      Rom::Embedded(s) => s.len(),
+    }
   }
 
-  fn get(&self) -> &[u8] {
-    &self.0
-  }
-}
-
-pub struct EmbeddedRom(&'static [u8]);
-
-impl Rom for EmbeddedRom {
-  fn len(&self) -> usize {
-    self.0.len()
-  }
-
-  fn get(&self) -> &[u8] {
-    self.0
+  pub fn get(&self) -> &[u8] {
+    match self {
+      Rom::Heap(v) => v,
+      Rom::Embedded(s) => s,
+    }
   }
 }
 
 #[derive(PartialEq, Eq)]
-pub struct Cartridge<R: Rom> {
-  rom: R,
+pub struct Cartridge {
+  rom: Rom,
   mirroring: Mirroring,
   prg: Range<usize>,
   chr: Range<usize>,
@@ -173,26 +166,22 @@ pub struct Cartridge<R: Rom> {
   uses_chr_ram: bool,
 }
 
-impl Cartridge<HeapRom> {
+impl Cartridge {
   #[cfg(feature = "std")]
-  pub fn blow_dust(path: std::path::PathBuf) -> Result<Cartridge<HeapRom>, CartridgeError> {
+  pub fn blow_dust(path: std::path::PathBuf) -> Result<Cartridge, CartridgeError> {
     let rom = std::fs::read(path)?;
-    Cartridge::load(HeapRom(rom))
+    Cartridge::load(Rom::Heap(rom))
   }
 
-  pub fn blow_dust_vec(rom: Vec<u8>) -> Result<Cartridge<HeapRom>, CartridgeError> {
-    Cartridge::load(HeapRom(rom))
+  pub fn blow_dust_vec(rom: Vec<u8>) -> Result<Cartridge, CartridgeError> {
+    Cartridge::load(Rom::Heap(rom))
   }
-}
 
-impl Cartridge<EmbeddedRom> {
-  pub fn blow_dust_no_heap(rom: &'static [u8]) -> Result<Cartridge<EmbeddedRom>, CartridgeError> {
-    Cartridge::load(EmbeddedRom(rom))
+  pub fn blow_dust_no_heap(rom: &'static [u8]) -> Result<Cartridge, CartridgeError> {
+    Cartridge::load(Rom::Embedded(rom))
   }
-}
 
-impl<R: Rom> Cartridge<R> {
-  pub fn load(rom: R) -> Result<Cartridge<R>, CartridgeError> {
+  pub fn load(rom: Rom) -> Result<Cartridge, CartridgeError> {
     let bin = rom.get();
     if bin.len() < HEADER_SIZE + PRG_ROM_BLOCK_SIZE || bin[0..4] != MAGIC {
       return Err(CartridgeError::InvalidCartridge("strange size"));
@@ -314,7 +303,7 @@ impl<R: Rom> Cartridge<R> {
   }
 }
 
-impl<R: Rom> Display for Cartridge<R> {
+impl Display for Cartridge {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     let chr_ram_or_rom = if self.chr_ram.is_some() { " RAM" } else { "" };
     write!(
@@ -332,7 +321,7 @@ impl<R: Rom> Display for Cartridge<R> {
   }
 }
 
-impl<R: Rom> core::fmt::Debug for Cartridge<R> {
+impl core::fmt::Debug for Cartridge {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     write!(f, "{self}")
   }
@@ -343,15 +332,15 @@ mod tests {
   use alloc::string::ToString;
 
   use super::Cartridge;
-  use crate::cartridge::EmbeddedRom;
+  use crate::cartridge::Rom;
 
   fn assert_cart(r: &'static [u8], s: &str) {
-    assert_eq!(Cartridge::load(EmbeddedRom(r)).unwrap().to_string(), s);
+    assert_eq!(Cartridge::load(Rom::Embedded(r)).unwrap().to_string(), s);
   }
 
   #[test]
   fn cart_invalid_len() {
-    assert!(Cartridge::load(EmbeddedRom(&[b'N', b'E', b'S'])).is_err())
+    assert!(Cartridge::load(Rom::Embedded(&[b'N', b'E', b'S'])).is_err())
   }
 
   #[test]
