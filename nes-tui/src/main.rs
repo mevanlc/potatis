@@ -38,10 +38,11 @@ enum Graphics {
 }
 
 impl Graphics {
-  fn renderer(self) -> Box<dyn Renderer> {
+  fn renderer(self, scale: u32) -> Box<dyn Renderer> {
     match self {
-      Graphics::Sixel => Box::new(SixelRenderer::new()),
-      Graphics::Kitty => Box::new(KittyRenderer::new()),
+      Graphics::Sixel => Box::new(SixelRenderer::with_scale(scale)),
+      Graphics::Kitty => Box::new(KittyRenderer::with_scale(scale)),
+      // Halfblock has a fixed pixel-pair-per-cell mapping; scale is ignored.
       Graphics::Halfblock => Box::new(HalfblockRenderer::new(ColorDepth::Truecolor)),
     }
   }
@@ -66,6 +67,11 @@ struct Args {
   /// Graphics protocol to render with.
   #[arg(short = 'g', long = "graphics", value_enum)]
   graphics: Graphics,
+
+  /// Integer pixel scale for sixel and kitty modes (ignored for halfblock).
+  /// 1 = native NES resolution, 3 = 3x, etc.
+  #[arg(short = 's', long = "scale", default_value_t = 3, value_parser = clap::value_parser!(u32).range(1..=8))]
+  scale: u32,
 
   /// Path to a .nes ROM file.
   rom: std::path::PathBuf,
@@ -110,7 +116,7 @@ fn main() -> Result<()> {
   // `nes` so it is dropped *after* the host flushes its output buffer.
   let _terminal = Terminal::enter()?;
 
-  let host = TuiHost::new(io::stdout(), args.graphics.renderer());
+  let host = TuiHost::new(io::stdout(), args.graphics.renderer(args.scale));
   let mut nes = Nes::insert(cart, host);
   nes.fps_max(args.graphics.fps());
 

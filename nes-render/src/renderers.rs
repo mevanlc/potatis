@@ -73,17 +73,25 @@ pub struct SixelRenderer {
 }
 
 impl SixelRenderer {
+  /// Default 3x scale, matching the long-standing nes-cloud behavior.
   pub fn new() -> Self {
+    Self::with_scale(3)
+  }
+
+  /// Integer pixel scale (1 = native NTSC 240x224, 3 = 720x672, ...). Applied
+  /// by libsixel as a percent post-scale of the encoded PNG.
+  pub fn with_scale(scale: u32) -> Self {
     let outfile = tempfile::Builder::new().prefix("sixel").tempfile().unwrap();
+    let percent = (scale.max(1) as u64) * 100;
 
     let sixel = sixel_rs::encoder::Encoder::new().unwrap();
     sixel.set_quality(sixel_rs::optflags::Quality::Low).unwrap();
     sixel.set_output(outfile.path()).unwrap();
     sixel
-      .set_height(sixel_rs::optflags::SizeSpecification::Percent(300))
+      .set_height(sixel_rs::optflags::SizeSpecification::Percent(percent))
       .unwrap();
     sixel
-      .set_width(sixel_rs::optflags::SizeSpecification::Percent(300))
+      .set_width(sixel_rs::optflags::SizeSpecification::Percent(percent))
       .unwrap();
 
     Self {
@@ -252,15 +260,25 @@ impl Renderer for AsciiRenderer {
 /// from stdin.
 pub struct KittyRenderer {
   buf: Vec<u8>,
+  scale: usize,
 }
 
 impl KittyRenderer {
   // Kitty requires the base64 payload be split into chunks of at most 4096 bytes.
   const CHUNK: usize = 4096;
 
+  /// Default 1x scale (native NTSC pixels). For most terminals you'll want
+  /// `with_scale(3)` or higher — at 1x the image is tiny on hi-DPI displays.
   pub fn new() -> Self {
+    Self::with_scale(1)
+  }
+
+  /// Integer pixel scale (nearest-neighbor upscaled before base64). 1 = native
+  /// NTSC 240x224, 3 = 720x672, etc.
+  pub fn with_scale(scale: u32) -> Self {
     Self {
       buf: Vec::with_capacity(256 * 1024),
+      scale: scale.max(1) as usize,
     }
   }
 }
@@ -273,15 +291,25 @@ impl Default for KittyRenderer {
 
 impl Renderer for KittyRenderer {
   fn render(&mut self, frame: &RenderFrame) -> Vec<u8> {
-    let pixels: Vec<u8> = frame.pixels_ntsc().collect();
+    let src: Vec<u8> = frame.pixels_ntsc().collect();
+    let src_w = nes::frame::NTSC_WIDTH;
+    let src_h = nes::frame::NTSC_HEIGHT;
+    let (pixels, w, h) = if self.scale == 1 {
+      (src, src_w, src_h)
+    } else {
+      (
+        nearest_neighbor_upscale_rgb(&src, src_w, src_h, self.scale),
+        src_w * self.scale,
+        src_h * self.scale,
+      )
+    };
+
     let encoded = BASE64.encode(&pixels);
     let payload = encoded.as_bytes();
 
     self.buf.clear();
     self.buf.extend_from_slice(ansi::CURSOR_HOME_BYTES);
 
-    let w = nes::frame::NTSC_WIDTH;
-    let h = nes::frame::NTSC_HEIGHT;
     let chunks = payload.chunks(Self::CHUNK);
     let last_index = (payload.len().saturating_sub(1)) / Self::CHUNK;
 
@@ -303,6 +331,29 @@ impl Renderer for KittyRenderer {
 
     self.buf.clone()
   }
+}
+
+/// Nearest-neighbor upscale of a tightly-packed RGB888 image. Each source
+/// pixel becomes a `scale`x`scale` block of identical pixels in the output.
+fn nearest_neighbor_upscale_rgb(src: &[u8], w: usize, h: usize, scale: usize) -> Vec<u8> {
+  debug_assert!(scale >= 1);
+  let sw = w * scale;
+  let mut out = Vec::with_capacity(sw * h * scale * 3);
+  let mut scaled_row: Vec<u8> = Vec::with_capacity(sw * 3);
+  for y in 0..h {
+    scaled_row.clear();
+    let row = &src[y * w * 3..(y + 1) * w * 3];
+    for x in 0..w {
+      let pix = &row[x * 3..x * 3 + 3];
+      for _ in 0..scale {
+        scaled_row.extend_from_slice(pix);
+      }
+    }
+    for _ in 0..scale {
+      out.extend_from_slice(&scaled_row);
+    }
+  }
+  out
 }
 
 #[cfg(test)]
@@ -337,6 +388,19 @@ mod tests {
     assert!(8_000 <= sixel888, "sixel 888 too big: {sixel888}kb"); // 0.24mb/s at 30 fps
     assert!(153_000 <= color, "color too big: {color}kb"); // 1.5mb/s at 10
     assert!(40_000 <= ascii, "ascii too big: {ascii}kb"); // 0.8mb/s at 20
+  }
+
+  #[test]
+  fn kitty_scale_grows_payload_quadratically() {
+    let frame = fixture_frame();
+    let small = KittyRenderer::with_scale(1).render(&frame).len();
+    let big = KittyRenderer::with_scale(3).render(&frame).len();
+    // 3x scale -> ~9x pixel area, so the (mostly base64) payload should grow
+    // by roughly the same factor. Allow generous slack for framing overhead.
+    assert!(
+      big > small * 7 && big < small * 11,
+      "scale 3 payload {big} not ~9x of scale 1 {small}"
+    );
   }
 
   #[test]
