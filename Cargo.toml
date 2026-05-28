@@ -12,6 +12,8 @@ members = [
 exclude = [
   "nes-embedded",
   "nes-cloud",
+  "nes-render",
+  "nes-tui",
   "profile",
 ]
 

@@ -11,11 +11,10 @@ use nes::joypad::JoypadButton;
 use nes::joypad::JoypadEvent;
 use nes::nes::HostEvent;
 use nes::nes::HostPlatform;
+use nes_render::RenderMode;
+use nes_render::Renderer;
 
 use crate::io::CloudStream;
-use crate::renderers::RenderMode;
-use crate::renderers::Renderer;
-use crate::renderers::{self};
 
 const PRESS_RELEASED_AFTER_MS: u128 = 250;
 
@@ -38,7 +37,7 @@ impl CloudHost {
     mode: RenderMode,
     tx_mb_limit: usize,
   ) -> Self {
-    let renderer = renderers::create(mode);
+    let renderer = nes_render::create(mode);
     Self {
       stream,
       rx,

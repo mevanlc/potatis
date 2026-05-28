@@ -1,4 +1,3 @@
-
 use std::error::Error;
 use std::fmt::Display;
 use std::io::Read;
@@ -17,7 +16,9 @@ use libcloud::resources::StrId;
 use libcloud::utils::strhash;
 use libcloud::utils::ReadByte;
 use libcloud::ServerMode;
-use libcloud::{self,};
+use libcloud::{
+  self,
+};
 use log::debug;
 use log::error;
 use log::info;
@@ -25,17 +26,14 @@ use log::warn;
 use nes::cartridge::error::CartridgeError;
 use nes::cartridge::Cartridge;
 use nes::cartridge::Header;
-use nes::cartridge::HeapRom;
 use nes::nes::Nes;
-use renderers::RenderMode;
+use nes_render::RenderMode;
 
 use crate::host::CloudHost;
 use crate::io::CloudStream;
 
-mod ansi;
 mod host;
 mod io;
-mod renderers;
 
 const FD_STDOUT: i32 = 1;
 
@@ -43,7 +41,7 @@ const FD_STDOUT: i32 = 1;
 enum RomSelection {
   Invalid(char),
   Included(PathBuf),
-  Cart(Cartridge<HeapRom>, md5::Digest),
+  Cart(Cartridge, md5::Digest),
 }
 
 #[derive(Debug)]
@@ -109,7 +107,7 @@ fn select_render_mode(stream: &mut impl Read) -> Result<RenderMode, Box<dyn Erro
     let input = stream.read_byte()?;
     match input {
       b'1' => Ok(RenderMode::Sixel),
-      b'2' => Ok(RenderMode::Color),
+      b'2' => Ok(RenderMode::Halfblock),
       b'3' => Ok(RenderMode::Ascii),
       0x0a if first => prompt(stream, false),
       _ => {
@@ -139,14 +137,15 @@ fn recv_thread(mut stream: CloudStream, tx: Sender<u8>) {
 fn emulation_thread(
   stream: CloudStream,
   rx: Receiver<u8>,
-  cart: Cartridge<HeapRom>,
+  cart: Cartridge,
   mode: RenderMode,
   res: &Resources,
 ) {
   let fps = match mode {
-    RenderMode::Color => res.fps_conf().color,
+    RenderMode::Halfblock => res.fps_conf().color,
     RenderMode::Ascii => res.fps_conf().ascii,
     RenderMode::Sixel => res.fps_conf().sixel,
+    RenderMode::Kitty => res.fps_conf().sixel,
   };
 
   info!(
@@ -230,7 +229,7 @@ fn main() -> Result<(), Box<dyn Error>> {
   };
 
   let mode = match srv_mode {
-    ServerMode::Color => RenderMode::Color,
+    ServerMode::Color => RenderMode::Halfblock,
     ServerMode::Ascii => RenderMode::Ascii,
     ServerMode::Sixel => RenderMode::Sixel,
     ServerMode::User => {

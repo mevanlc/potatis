@@ -1,0 +1,18 @@
+[package]
+name = "nes-render"
+version = "0.1.0"
+edition = "2021"
+
+# Shared terminal renderers for the NES frame buffer. Consumed by nes-cloud
+# (netcat/cloud gaming) and nes-tui (local crossterm client).
+
+[dependencies]
+nes = { path = "../nes" }
+ansi_colours = "1.1.1"
+sixel-rs = "0.3.3"
+tempfile = "3.3.0"
+png = "0.17.7"
+base64 = "0.22"
+
+[lib]
+doctest = false
