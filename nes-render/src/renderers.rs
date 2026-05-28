@@ -261,6 +261,15 @@ impl Renderer for AsciiRenderer {
 pub struct KittyRenderer {
   buf: Vec<u8>,
   scale: usize,
+  // Double-buffered image ids that alternate every frame. Each render transmits
+  // the new image under one id, then deletes the previous frame's image (with
+  // its placement) under the *other* id — so there is never a moment with no
+  // placement on screen. Re-using a single id, by contrast, gives the terminal
+  // a window where the old image is being replaced and nothing is displayed,
+  // which manifests as visible flashing once frames are large enough that the
+  // multi-chunk transmit straddles a redraw (≥~scale 2).
+  next_id: u32,
+  prev_id: Option<u32>,
 }
 
 impl KittyRenderer {
@@ -279,6 +288,8 @@ impl KittyRenderer {
     Self {
       buf: Vec::with_capacity(256 * 1024),
       scale: scale.max(1) as usize,
+      next_id: 1,
+      prev_id: None,
     }
   }
 }
@@ -307,6 +318,9 @@ impl Renderer for KittyRenderer {
     let encoded = BASE64.encode(&pixels);
     let payload = encoded.as_bytes();
 
+    let id = self.next_id;
+    let prev = self.prev_id;
+
     self.buf.clear();
     self.buf.extend_from_slice(ansi::CURSOR_HOME_BYTES);
 
@@ -319,7 +333,7 @@ impl Renderer for KittyRenderer {
         // Control keys are only sent on the first chunk.
         self
           .buf
-          .extend_from_slice(format!("\x1b_Ga=T,f=24,s={w},v={h},i=1,q=2,m={more};").as_bytes());
+          .extend_from_slice(format!("\x1b_Ga=T,f=24,s={w},v={h},i={id},q=2,m={more};").as_bytes());
       } else {
         self
           .buf
@@ -328,6 +342,19 @@ impl Renderer for KittyRenderer {
       self.buf.extend_from_slice(chunk);
       self.buf.extend_from_slice(b"\x1b\\");
     }
+
+    // The new placement is now on top (kitty orders same-z placements by
+    // creation time). Tell the terminal to garbage-collect the previous frame's
+    // image and its placement. This happens *after* the new placement is
+    // visible, so the screen is never blank.
+    if let Some(p) = prev {
+      self
+        .buf
+        .extend_from_slice(format!("\x1b_Ga=d,d=I,i={p},q=2;\x1b\\").as_bytes());
+    }
+
+    self.prev_id = Some(id);
+    self.next_id = if id == 1 { 2 } else { 1 };
 
     self.buf.clone()
   }
@@ -388,6 +415,43 @@ mod tests {
     assert!(8_000 <= sixel888, "sixel 888 too big: {sixel888}kb"); // 0.24mb/s at 30 fps
     assert!(153_000 <= color, "color too big: {color}kb"); // 1.5mb/s at 10
     assert!(40_000 <= ascii, "ascii too big: {ascii}kb"); // 0.8mb/s at 20
+  }
+
+  #[test]
+  fn kitty_alternates_ids_and_deletes_previous() {
+    let frame = fixture_frame();
+    let mut r = KittyRenderer::new();
+
+    let f1 = r.render(&frame);
+    // First frame: new image at id=1, no previous to delete.
+    let f1s = std::str::from_utf8(&f1).unwrap();
+    assert!(f1s.contains(",i=1,"), "first frame should transmit at id=1");
+    assert!(
+      !f1s.contains("a=d,"),
+      "first frame must not delete (nothing yet)"
+    );
+
+    let f2 = r.render(&frame);
+    // Second frame: new image at id=2, *then* delete id=1.
+    let f2s = std::str::from_utf8(&f2).unwrap();
+    assert!(
+      f2s.contains(",i=2,"),
+      "second frame should transmit at id=2"
+    );
+    let place = f2s.find(",i=2,").unwrap();
+    let delete = f2s
+      .find("a=d,d=I,i=1")
+      .expect("second frame should delete id=1");
+    assert!(
+      delete > place,
+      "delete must come after the new placement so there's no blank window"
+    );
+
+    let f3 = r.render(&frame);
+    // Third frame: id=1 again (alternation), delete id=2.
+    let f3s = std::str::from_utf8(&f3).unwrap();
+    assert!(f3s.contains(",i=1,"));
+    assert!(f3s.contains("a=d,d=I,i=2"));
   }
 
   #[test]
