@@ -1,0 +1,20 @@
+[package]
+name = "nes-tui"
+version = "0.1.0"
+edition = "2021"
+
+# Local terminal NES client. Renders into the current terminal using one of
+# several graphics protocols (Sixel, Kitty, Unicode half-blocks) and reads
+# input via crossterm. The cloud-free counterpart to nes-cloud.
+
+[[bin]]
+name = "nes-tui"
+path = "src/main.rs"
+
+[dependencies]
+nes = { path = "../nes" }
+nes-render = { path = "../nes-render" }
+crossterm = "0.28"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+crc32fast = "1.3.2"
