@@ -1,9 +1,12 @@
 use std::fs::File;
 use std::io::BufWriter;
 use std::io::Read;
+use std::io::Write;
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
+use flate2::write::ZlibEncoder;
+use flate2::Compression;
 use nes::frame::PixelFormat;
 use nes::frame::PixelFormatRGB888;
 use nes::frame::RenderFrame;
@@ -258,9 +261,29 @@ impl Renderer for AsciiRenderer {
 /// replace the previous image in place rather than accumulating placements, and
 /// `q=2` suppresses the terminal's acknowledgement so we don't have to drain it
 /// from stdin.
+/// Tunable knobs for [`KittyRenderer`].
+#[derive(Debug, Clone, Copy)]
+pub struct KittyOpts {
+  /// Integer pixel scale (nearest-neighbor upscaled before transmit).
+  pub scale: u32,
+  /// Deflate the pixel buffer before base64. NES frames are mostly flat colors
+  /// and compress very well, which cuts per-frame bytes — especially helpful
+  /// at high `scale` where the payload would otherwise overwhelm the terminal.
+  pub zlib: bool,
+}
+
+impl Default for KittyOpts {
+  fn default() -> Self {
+    Self {
+      scale: 1,
+      zlib: false,
+    }
+  }
+}
+
 pub struct KittyRenderer {
   buf: Vec<u8>,
-  scale: usize,
+  opts: KittyOpts,
   // Double-buffered image ids that alternate every frame. Each render transmits
   // the new image under one id, then deletes the previous frame's image (with
   // its placement) under the *other* id — so there is never a moment with no
@@ -276,18 +299,27 @@ impl KittyRenderer {
   // Kitty requires the base64 payload be split into chunks of at most 4096 bytes.
   const CHUNK: usize = 4096;
 
-  /// Default 1x scale (native NTSC pixels). For most terminals you'll want
-  /// `with_scale(3)` or higher — at 1x the image is tiny on hi-DPI displays.
+  /// Default options (1x scale, no compression). At 1x the image is tiny on
+  /// hi-DPI displays — most callers want `with_scale(3)` or higher.
   pub fn new() -> Self {
-    Self::with_scale(1)
+    Self::with_opts(KittyOpts::default())
   }
 
-  /// Integer pixel scale (nearest-neighbor upscaled before base64). 1 = native
-  /// NTSC 240x224, 3 = 720x672, etc.
+  /// Convenience for the common "just change the scale" case.
   pub fn with_scale(scale: u32) -> Self {
+    Self::with_opts(KittyOpts {
+      scale,
+      ..KittyOpts::default()
+    })
+  }
+
+  pub fn with_opts(opts: KittyOpts) -> Self {
     Self {
       buf: Vec::with_capacity(256 * 1024),
-      scale: scale.max(1) as usize,
+      opts: KittyOpts {
+        scale: opts.scale.max(1),
+        zlib: opts.zlib,
+      },
       next_id: 1,
       prev_id: None,
     }
@@ -305,17 +337,25 @@ impl Renderer for KittyRenderer {
     let src: Vec<u8> = frame.pixels_ntsc().collect();
     let src_w = nes::frame::NTSC_WIDTH;
     let src_h = nes::frame::NTSC_HEIGHT;
-    let (pixels, w, h) = if self.scale == 1 {
+    let scale = self.opts.scale as usize;
+    let (pixels, w, h) = if scale == 1 {
       (src, src_w, src_h)
     } else {
       (
-        nearest_neighbor_upscale_rgb(&src, src_w, src_h, self.scale),
-        src_w * self.scale,
-        src_h * self.scale,
+        nearest_neighbor_upscale_rgb(&src, src_w, src_h, scale),
+        src_w * scale,
+        src_h * scale,
       )
     };
 
-    let encoded = BASE64.encode(&pixels);
+    // Optionally compress before base64. The terminal sees `o=z` in the first
+    // chunk's control segment and inflates after base64-decoding.
+    let to_encode = if self.opts.zlib {
+      deflate(&pixels)
+    } else {
+      pixels
+    };
+    let encoded = BASE64.encode(&to_encode);
     let payload = encoded.as_bytes();
 
     let id = self.next_id;
@@ -326,14 +366,15 @@ impl Renderer for KittyRenderer {
 
     let chunks = payload.chunks(Self::CHUNK);
     let last_index = (payload.len().saturating_sub(1)) / Self::CHUNK;
+    let compress = if self.opts.zlib { ",o=z" } else { "" };
 
     for (i, chunk) in chunks.enumerate() {
       let more = if i == last_index { 0 } else { 1 };
       if i == 0 {
         // Control keys are only sent on the first chunk.
-        self
-          .buf
-          .extend_from_slice(format!("\x1b_Ga=T,f=24,s={w},v={h},i={id},q=2,m={more};").as_bytes());
+        self.buf.extend_from_slice(
+          format!("\x1b_Ga=T,f=24,s={w},v={h},i={id},q=2{compress},m={more};").as_bytes(),
+        );
       } else {
         self
           .buf
@@ -358,6 +399,15 @@ impl Renderer for KittyRenderer {
 
     self.buf.clone()
   }
+}
+
+/// RFC 1950 zlib-deflate `src`. Used to feed kitty's `o=z` decompression. Fast
+/// compression level — encode speed matters more than ratio at 60 fps, and NES
+/// content is so flat that even the fast preset gives big savings.
+fn deflate(src: &[u8]) -> Vec<u8> {
+  let mut enc = ZlibEncoder::new(Vec::with_capacity(src.len() / 4), Compression::fast());
+  enc.write_all(src).expect("zlib write to Vec cannot fail");
+  enc.finish().expect("zlib finish to Vec cannot fail")
 }
 
 /// Nearest-neighbor upscale of a tightly-packed RGB888 image. Each source
@@ -415,6 +465,34 @@ mod tests {
     assert!(8_000 <= sixel888, "sixel 888 too big: {sixel888}kb"); // 0.24mb/s at 30 fps
     assert!(153_000 <= color, "color too big: {color}kb"); // 1.5mb/s at 10
     assert!(40_000 <= ascii, "ascii too big: {ascii}kb"); // 0.8mb/s at 20
+  }
+
+  #[test]
+  fn kitty_zlib_emits_o_z_and_shrinks_payload() {
+    use super::KittyOpts;
+    let frame = fixture_frame();
+    let plain = KittyRenderer::with_scale(3).render(&frame).len();
+    let zipped = KittyRenderer::with_opts(KittyOpts {
+      scale: 3,
+      zlib: true,
+    })
+    .render(&frame)
+    .len();
+
+    let bytes = KittyRenderer::with_opts(KittyOpts {
+      scale: 1,
+      zlib: true,
+    })
+    .render(&frame);
+    let s = std::str::from_utf8(&bytes).unwrap();
+    assert!(s.contains(",o=z,"), "first chunk header must advertise o=z");
+
+    // The PAL fixture is mostly flat color — easy 2x or better at scale 3, and
+    // the compressed payload is fully consumed by the encoded image.
+    assert!(
+      zipped * 2 < plain,
+      "zlib must roughly halve the payload (plain={plain}, zipped={zipped})"
+    );
   }
 
   #[test]

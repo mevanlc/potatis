@@ -23,6 +23,7 @@ use nes::cartridge::Cartridge;
 use nes::nes::Nes;
 use nes_render::ColorDepth;
 use nes_render::HalfblockRenderer;
+use nes_render::KittyOpts;
 use nes_render::KittyRenderer;
 use nes_render::Renderer;
 use nes_render::SixelRenderer;
@@ -38,16 +39,20 @@ enum Graphics {
 }
 
 impl Graphics {
-  fn renderer(self, scale: u32) -> Box<dyn Renderer> {
+  fn renderer(self, scale: u32, kitty_opts: KittyOpts) -> Box<dyn Renderer> {
     match self {
       Graphics::Sixel => Box::new(SixelRenderer::with_scale(scale)),
-      Graphics::Kitty => Box::new(KittyRenderer::with_scale(scale)),
+      Graphics::Kitty => Box::new(KittyRenderer::with_opts(KittyOpts {
+        scale,
+        ..kitty_opts
+      })),
       // Halfblock has a fixed pixel-pair-per-cell mapping; scale is ignored.
       Graphics::Halfblock => Box::new(HalfblockRenderer::new(ColorDepth::Truecolor)),
     }
   }
 
-  fn fps(self) -> usize {
+  /// Default fps cap when the user hasn't passed `--fps-max`.
+  fn default_fps(self) -> u32 {
     match self {
       // Sixel re-encodes a PNG per frame and can't sustain 60fps; capping keeps
       // the emulation running at a sane wall-clock speed rather than thrashing.
@@ -55,6 +60,32 @@ impl Graphics {
       Graphics::Kitty | Graphics::Halfblock => 60,
     }
   }
+}
+
+/// Parse the comma-separated `--kitty-opts` string into a [`KittyOpts`]. The
+/// syntax (`k=v` pairs) deliberately echoes a few keys of the kitty graphics
+/// wire protocol for familiarity, but this is *not* a passthrough — only the
+/// keys listed here are understood, and they may be interpreted differently.
+///
+/// Supported:
+///   o=z  -- zlib-compress the pixel payload (kitty's `o=z` semantics)
+fn parse_kitty_opts(s: &str) -> Result<KittyOpts> {
+  let mut opts = KittyOpts::default();
+  for raw in s.split(',') {
+    let token = raw.trim();
+    if token.is_empty() {
+      continue;
+    }
+    let (k, v) = match token.split_once('=') {
+      Some((k, v)) => (k.trim(), Some(v.trim())),
+      None => (token, None),
+    };
+    match (k, v) {
+      ("o", Some("z")) => opts.zlib = true,
+      _ => anyhow::bail!("unknown --kitty-opts entry {token:?}; supported keys: o=z"),
+    }
+  }
+  Ok(opts)
 }
 
 #[derive(Parser, Debug)]
@@ -72,6 +103,16 @@ struct Args {
   /// 1 = native NES resolution, 3 = 3x, etc.
   #[arg(short = 's', long = "scale", default_value_t = 3, value_parser = clap::value_parser!(u32).range(1..=8))]
   scale: u32,
+
+  /// Override the per-mode default fps cap. Default: 60 (halfblock/kitty), 15 (sixel).
+  #[arg(long = "fps-max", value_parser = clap::value_parser!(u32).range(1..=240))]
+  fps_max: Option<u32>,
+
+  /// Kitty-specific options as comma-separated `k[=v]` pairs.
+  /// Currently supported: `o=z` (zlib-compress the pixel payload).
+  /// Only valid with `-g kitty`.
+  #[arg(long = "kitty-opts", default_value = "")]
+  kitty_opts: String,
 
   /// Path to a .nes ROM file.
   rom: std::path::PathBuf,
@@ -108,6 +149,11 @@ impl Drop for Terminal {
 fn main() -> Result<()> {
   let args = Args::parse();
 
+  let kitty_opts = parse_kitty_opts(&args.kitty_opts)?;
+  if !args.kitty_opts.is_empty() && args.graphics != Graphics::Kitty {
+    anyhow::bail!("--kitty-opts is only valid with -g kitty");
+  }
+
   let cart = Cartridge::blow_dust(args.rom.clone())
     .map_err(|e| anyhow::anyhow!("failed to load ROM {}: {e}", args.rom.display()))?;
 
@@ -116,9 +162,10 @@ fn main() -> Result<()> {
   // `nes` so it is dropped *after* the host flushes its output buffer.
   let _terminal = Terminal::enter()?;
 
-  let host = TuiHost::new(io::stdout(), args.graphics.renderer(args.scale));
+  let host = TuiHost::new(io::stdout(), args.graphics.renderer(args.scale, kitty_opts));
   let mut nes = Nes::insert(cart, host);
-  nes.fps_max(args.graphics.fps());
+  let fps = args.fps_max.unwrap_or_else(|| args.graphics.default_fps());
+  nes.fps_max(fps as usize);
 
   while nes.powered_on() {
     nes.tick();

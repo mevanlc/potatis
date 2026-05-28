@@ -12,6 +12,7 @@ pub use renderers::create;
 pub use renderers::AsciiRenderer;
 pub use renderers::ColorDepth;
 pub use renderers::HalfblockRenderer;
+pub use renderers::KittyOpts;
 pub use renderers::KittyRenderer;
 pub use renderers::RenderMode;
 pub use renderers::Renderer;

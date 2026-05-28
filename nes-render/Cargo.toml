@@ -13,6 +13,7 @@ sixel-rs = "0.3.3"
 tempfile = "3.3.0"
 png = "0.17.7"
 base64 = "0.22"
+flate2 = "1"
 
 [lib]
 doctest = false
