@@ -10,6 +10,8 @@ mod renderers;
 
 pub use renderers::create;
 pub use renderers::AsciiRenderer;
+pub use renderers::ChafaOpts;
+pub use renderers::ChafaRenderer;
 pub use renderers::ColorDepth;
 pub use renderers::HalfblockRenderer;
 pub use renderers::KittyOpts;

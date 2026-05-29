@@ -21,6 +21,8 @@ use crossterm::terminal::LeaveAlternateScreen;
 use host::TuiHost;
 use nes::cartridge::Cartridge;
 use nes::nes::Nes;
+use nes_render::ChafaOpts;
+use nes_render::ChafaRenderer;
 use nes_render::ColorDepth;
 use nes_render::HalfblockRenderer;
 use nes_render::KittyOpts;
@@ -36,10 +38,13 @@ enum Graphics {
   Kitty,
   /// Unicode upper-half-block characters with 24-bit color. Works anywhere.
   Halfblock,
+  /// Defer to the `chafa` CLI (octants/sextants/quadrants etc., gamma-correct).
+  /// Highest quality terminal rendering at the cost of a per-frame subprocess.
+  Chafa,
 }
 
 impl Graphics {
-  fn renderer(self, scale: u32, kitty_opts: KittyOpts) -> Box<dyn Renderer> {
+  fn renderer(self, scale: u32, kitty_opts: KittyOpts, chafa_opts: ChafaOpts) -> Box<dyn Renderer> {
     match self {
       Graphics::Sixel => Box::new(SixelRenderer::with_scale(scale)),
       Graphics::Kitty => Box::new(KittyRenderer::with_opts(KittyOpts {
@@ -48,6 +53,9 @@ impl Graphics {
       })),
       // Halfblock has a fixed pixel-pair-per-cell mapping; scale is ignored.
       Graphics::Halfblock => Box::new(HalfblockRenderer::new(ColorDepth::Truecolor)),
+      // Chafa has its own scale concept via --chafa-opts scale=N; the global
+      // -s is ignored here (chafa picks its own default unless overridden).
+      Graphics::Chafa => Box::new(ChafaRenderer::new(chafa_opts)),
     }
   }
 
@@ -57,9 +65,40 @@ impl Graphics {
       // Sixel re-encodes a PNG per frame and can't sustain 60fps; capping keeps
       // the emulation running at a sane wall-clock speed rather than thrashing.
       Graphics::Sixel => 15,
+      // Chafa spawns a subprocess per frame — similar bottleneck as sixel.
+      Graphics::Chafa => 20,
       Graphics::Kitty | Graphics::Halfblock => 60,
     }
   }
+}
+
+/// Parse `--chafa-opts` into a [`ChafaOpts`]. Same `k[=v]`, comma-separated
+/// syntax as `--kitty-opts`. Not a literal passthrough to the chafa CLI —
+/// keys are translated to their corresponding chafa flags by the renderer.
+///
+/// Supported:
+///   f=<format>       -- chafa --format (symbols | sixels | kitty | iterm)
+///   symbols=<set>    -- chafa --symbols (octant | sextant | vhalf | block | ...)
+///   scale=<num|max>  -- chafa --scale (e.g. 1, 1.5, 2, max)
+fn parse_chafa_opts(s: &str) -> Result<ChafaOpts> {
+  let mut opts = ChafaOpts::default();
+  for raw in s.split(',') {
+    let token = raw.trim();
+    if token.is_empty() {
+      continue;
+    }
+    let Some((k, v)) = token.split_once('=') else {
+      anyhow::bail!("--chafa-opts entry {token:?} needs a value (k=v form)");
+    };
+    let (k, v) = (k.trim(), v.trim());
+    match k {
+      "f" | "format" => opts.format = Some(v.to_string()),
+      "symbols" => opts.symbols = Some(v.to_string()),
+      "scale" => opts.scale = Some(v.to_string()),
+      _ => anyhow::bail!("unknown --chafa-opts entry {token:?}; supported keys: f, symbols, scale"),
+    }
+  }
+  Ok(opts)
 }
 
 /// Parse the comma-separated `--kitty-opts` string into a [`KittyOpts`]. The
@@ -114,6 +153,12 @@ struct Args {
   #[arg(long = "kitty-opts", default_value = "")]
   kitty_opts: String,
 
+  /// chafa-specific options as comma-separated `k[=v]` pairs.
+  /// Currently supported: `f=<format>`, `symbols=<set>`, `scale=<num|max>`.
+  /// Only valid with `-g chafa`.
+  #[arg(long = "chafa-opts", default_value = "")]
+  chafa_opts: String,
+
   /// Path to a .nes ROM file.
   rom: std::path::PathBuf,
 }
@@ -153,6 +198,16 @@ fn main() -> Result<()> {
   if !args.kitty_opts.is_empty() && args.graphics != Graphics::Kitty {
     anyhow::bail!("--kitty-opts is only valid with -g kitty");
   }
+  let chafa_opts = parse_chafa_opts(&args.chafa_opts)?;
+  if !args.chafa_opts.is_empty() && args.graphics != Graphics::Chafa {
+    anyhow::bail!("--chafa-opts is only valid with -g chafa");
+  }
+  // Probe chafa availability before entering raw mode so a missing binary
+  // surfaces as an ordinary error instead of a cleared alt-screen.
+  if args.graphics == Graphics::Chafa {
+    ChafaRenderer::probe()
+      .map_err(|e| anyhow::anyhow!("`chafa` CLI not available ({e}); try `brew install chafa`"))?;
+  }
 
   let cart = Cartridge::blow_dust(args.rom.clone())
     .map_err(|e| anyhow::anyhow!("failed to load ROM {}: {e}", args.rom.display()))?;
@@ -162,7 +217,12 @@ fn main() -> Result<()> {
   // `nes` so it is dropped *after* the host flushes its output buffer.
   let _terminal = Terminal::enter()?;
 
-  let host = TuiHost::new(io::stdout(), args.graphics.renderer(args.scale, kitty_opts));
+  let initial_size = crossterm::terminal::size().unwrap_or((80, 24));
+  let host = TuiHost::new(
+    io::stdout(),
+    args.graphics.renderer(args.scale, kitty_opts, chafa_opts),
+    initial_size,
+  );
   let mut nes = Nes::insert(cart, host);
   let fps = args.fps_max.unwrap_or_else(|| args.graphics.default_fps());
   nes.fps_max(fps as usize);

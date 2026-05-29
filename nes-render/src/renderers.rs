@@ -56,6 +56,11 @@ pub trait Renderer {
   /// Render `frame` to terminal bytes. Output is prefixed with a cursor-home so
   /// successive frames overdraw in place.
   fn render(&mut self, frame: &RenderFrame) -> Vec<u8>;
+
+  /// Notify the renderer of the current terminal size in cells. Called once at
+  /// startup and again on every resize. Most renderers don't care; the chafa
+  /// renderer uses it to drive `--view-size`. Default: no-op.
+  fn on_resize(&mut self, _cols: u16, _rows: u16) {}
 }
 
 /// Construct a renderer for `mode`. Halfblock defaults to 256-color for maximum
@@ -401,6 +406,159 @@ impl Renderer for KittyRenderer {
   }
 }
 
+/// Tunable knobs for [`ChafaRenderer`]. These are translated to the matching
+/// `chafa` CLI flags by the renderer — not a literal passthrough, just a
+/// curated subset. `None` means "let chafa pick its own default."
+#[derive(Debug, Clone, Default)]
+pub struct ChafaOpts {
+  /// chafa `--format`. Recognized: `symbols`, `sixels`, `kitty`, `iterm`.
+  pub format: Option<String>,
+  /// chafa `--symbols`. E.g. `octant`, `sextant`, `vhalf`, `block`, etc.
+  pub symbols: Option<String>,
+  /// chafa `--scale`. A number (e.g. `2`, `1.5`) or `max` (fit to view).
+  pub scale: Option<String>,
+}
+
+/// Renders frames by shelling out to the `chafa` CLI per frame.
+///
+/// chafa is a sophisticated terminal image renderer (gamma-correct downscaling,
+/// 2-color per-cell quantization, sub-cell glyph selection across half-blocks /
+/// quadrants / sextants / octants / braille). It's far higher fidelity than
+/// our halfblock renderer for arbitrary terminal sizes, at the cost of process
+/// spawn + PNG encode per frame — so cap fps modestly when using it.
+///
+/// We capture chafa's stdout via a pipe (rather than letting it inherit the
+/// TUI's TTY). That has two important side effects: chafa skips its terminal
+/// capability probes (whose replies would otherwise land in our crossterm
+/// input stream), and it falls back to `--view-size` for sizing — which we
+/// supply explicitly from [`Renderer::on_resize`].
+pub struct ChafaRenderer {
+  opts: ChafaOpts,
+  // Current terminal cell dimensions. Defaults to 80x24 until on_resize is
+  // called (which TuiHost does at startup and on every Resize event).
+  cols: u16,
+  rows: u16,
+}
+
+impl ChafaRenderer {
+  pub fn new(opts: ChafaOpts) -> Self {
+    Self {
+      opts,
+      cols: 80,
+      rows: 24,
+    }
+  }
+
+  /// Confirm the `chafa` CLI is on the PATH and runnable. Call this *before*
+  /// entering raw mode so a missing binary surfaces as an ordinary error
+  /// message instead of a cleared alt-screen.
+  pub fn probe() -> std::io::Result<()> {
+    let out = std::process::Command::new("chafa")
+      .arg("--version")
+      .stdout(std::process::Stdio::null())
+      .stderr(std::process::Stdio::null())
+      .output()?;
+    if out.status.success() {
+      Ok(())
+    } else {
+      Err(std::io::Error::other("`chafa --version` returned non-zero"))
+    }
+  }
+
+  /// Compose the chafa command for one frame. Split out for testability.
+  fn build_args(&self) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+      // Polite mode strips chafa's own cursor hide/show + alt-screen escapes
+      // so the output composes cleanly with TuiHost's own terminal control.
+      "--polite".into(),
+      "on".into(),
+      // Explicit view size — required since our piped stdout means chafa
+      // can't probe the TTY.
+      "--view-size".into(),
+      format!("{}x{}", self.cols.max(1), self.rows.max(1)),
+    ];
+    if let Some(f) = &self.opts.format {
+      args.push("--format".into());
+      args.push(f.clone());
+    }
+    if let Some(s) = &self.opts.symbols {
+      args.push("--symbols".into());
+      args.push(s.clone());
+    }
+    if let Some(sc) = &self.opts.scale {
+      args.push("--scale".into());
+      args.push(sc.clone());
+    }
+    // Read image from stdin.
+    args.push("-".into());
+    args
+  }
+}
+
+impl Renderer for ChafaRenderer {
+  fn render(&mut self, frame: &RenderFrame) -> Vec<u8> {
+    // 1. Encode the NES NTSC frame to an in-memory PNG. chafa reads PNG from
+    // stdin and figures out the input dimensions from it.
+    let pixels: Vec<u8> = frame.pixels_ntsc().collect();
+    let mut png_buf: Vec<u8> = Vec::with_capacity(64 * 1024);
+    {
+      let mut enc = png::Encoder::new(
+        &mut png_buf,
+        nes::frame::NTSC_WIDTH as u32,
+        nes::frame::NTSC_HEIGHT as u32,
+      );
+      enc.set_color(png::ColorType::Rgb);
+      enc.set_depth(png::BitDepth::Eight);
+      let Ok(mut w) = enc.write_header() else {
+        return Vec::new();
+      };
+      if w.write_image_data(&pixels).is_err() || w.finish().is_err() {
+        return Vec::new();
+      }
+    }
+
+    // 2. Spawn chafa, feed the PNG to its stdin, capture stdout.
+    let mut cmd = std::process::Command::new("chafa");
+    cmd
+      .args(self.build_args())
+      .stdin(std::process::Stdio::piped())
+      .stdout(std::process::Stdio::piped())
+      .stderr(std::process::Stdio::null());
+    let Ok(mut child) = cmd.spawn() else {
+      return Vec::new();
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+      // Best-effort: any error here just means chafa will see truncated input
+      // and produce a partial frame, which we'd rather discard than spam.
+      let _ = stdin.write_all(&png_buf);
+      // Stdin closes on drop, signaling EOF to chafa.
+    }
+    let Ok(output) = child.wait_with_output() else {
+      return Vec::new();
+    };
+
+    // 3. Build the final byte stream: cursor home + chafa output with LF→CRLF
+    // translation (raw-mode terminals don't map NL→CRNL).
+    let mut buf = Vec::with_capacity(ansi::CURSOR_HOME_BYTES.len() + output.stdout.len() + 64);
+    buf.extend_from_slice(ansi::CURSOR_HOME_BYTES);
+    let mut start = 0;
+    for (i, &b) in output.stdout.iter().enumerate() {
+      if b == b'\n' {
+        buf.extend_from_slice(&output.stdout[start..i]);
+        buf.extend_from_slice(b"\r\n");
+        start = i + 1;
+      }
+    }
+    buf.extend_from_slice(&output.stdout[start..]);
+    buf
+  }
+
+  fn on_resize(&mut self, cols: u16, rows: u16) {
+    self.cols = cols.max(1);
+    self.rows = rows.max(1);
+  }
+}
+
 /// RFC 1950 zlib-deflate `src`. Used to feed kitty's `o=z` decompression. Fast
 /// compression level — encode speed matters more than ratio at 60 fps, and NES
 /// content is so flat that even the fast preset gives big savings.
@@ -465,6 +623,43 @@ mod tests {
     assert!(8_000 <= sixel888, "sixel 888 too big: {sixel888}kb"); // 0.24mb/s at 30 fps
     assert!(153_000 <= color, "color too big: {color}kb"); // 1.5mb/s at 10
     assert!(40_000 <= ascii, "ascii too big: {ascii}kb"); // 0.8mb/s at 20
+  }
+
+  #[test]
+  fn chafa_builds_expected_argv() {
+    use super::ChafaOpts;
+    use super::ChafaRenderer;
+    let mut r = ChafaRenderer::new(ChafaOpts {
+      format: Some("symbols".into()),
+      symbols: Some("octant".into()),
+      scale: Some("2".into()),
+    });
+    r.on_resize(160, 40);
+    let argv = r.build_args();
+    let joined = argv.join(" ");
+    assert!(joined.contains("--polite on"), "always polite: {joined}");
+    assert!(
+      joined.contains("--view-size 160x40"),
+      "view-size from on_resize: {joined}"
+    );
+    assert!(joined.contains("--format symbols"), "format flag: {joined}");
+    assert!(
+      joined.contains("--symbols octant"),
+      "symbols flag: {joined}"
+    );
+    assert!(joined.contains("--scale 2"), "scale flag: {joined}");
+    assert_eq!(argv.last().map(String::as_str), Some("-"), "reads stdin");
+  }
+
+  #[test]
+  fn chafa_omits_unset_opts() {
+    use super::ChafaOpts;
+    use super::ChafaRenderer;
+    let r = ChafaRenderer::new(ChafaOpts::default());
+    let joined = r.build_args().join(" ");
+    assert!(!joined.contains("--format"));
+    assert!(!joined.contains("--symbols"));
+    assert!(!joined.contains("--scale"));
   }
 
   #[test]

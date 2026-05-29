@@ -47,7 +47,10 @@ pub struct TuiHost {
 }
 
 impl TuiHost {
-  pub fn new(out: Stdout, renderer: Box<dyn Renderer>) -> Self {
+  pub fn new(out: Stdout, mut renderer: Box<dyn Renderer>, initial_size: (u16, u16)) -> Self {
+    // Renderers that care (currently just chafa) need the terminal size before
+    // their first render. Subsequent resizes are forwarded in poll_events.
+    renderer.on_resize(initial_size.0, initial_size.1);
     Self {
       out: BufWriter::with_capacity(256 * 1024, out),
       renderer,
@@ -122,17 +125,23 @@ impl HostPlatform for TuiHost {
       let key = match event::read() {
         Ok(Event::Key(key)) => key,
         // A resize clears/reflows the terminal; force the next frame to be
-        // re-emitted even if its content is unchanged.
-        Ok(Event::Resize(_, _)) => {
+        // re-emitted even if its content is unchanged, and let the renderer
+        // adapt its sizing (chafa, in particular, needs --view-size).
+        Ok(Event::Resize(cols, rows)) => {
+          self.renderer.on_resize(cols, rows);
           self.force_redraw = true;
           continue;
         }
         _ => continue,
       };
 
-      // Quit: Esc or Ctrl-C (raw mode means we never get a SIGINT).
+      // Quit: Esc, Q, or Ctrl-C. Esc can be flaky in tmux when the keyboard
+      // enhancement flags are pushed (a lone 0x1b can be parsed ambiguously),
+      // so Q is the recommended robust alternative. Raw mode means Ctrl-C is
+      // delivered as a key event, not a SIGINT.
       let ctrl_c = key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
-      if key.code == KeyCode::Esc || ctrl_c {
+      let quit_char = matches!(key.code, KeyCode::Char('q') | KeyCode::Char('Q'));
+      if key.code == KeyCode::Esc || ctrl_c || quit_char {
         self.shutdown = true;
         continue;
       }
