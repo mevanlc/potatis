@@ -135,10 +135,10 @@ impl HostPlatform for TuiHost {
         _ => continue,
       };
 
-      // Quit: Esc, Q, or Ctrl-C. Esc can be flaky in tmux when the keyboard
-      // enhancement flags are pushed (a lone 0x1b can be parsed ambiguously),
-      // so Q is the recommended robust alternative. Raw mode means Ctrl-C is
-      // delivered as a key event, not a SIGINT.
+      // Quit: Esc, Q, or Ctrl-C. (Raw mode means Ctrl-C arrives as a key
+      // event, not as SIGINT.) Q is kept as a defensive alternative in case
+      // any subprocess or external program ends up pushing CSI-ish bytes into
+      // our stdin alongside genuine keypresses.
       let ctrl_c = key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
       let quit_char = matches!(key.code, KeyCode::Char('q') | KeyCode::Char('Q'));
       if key.code == KeyCode::Esc || ctrl_c || quit_char {

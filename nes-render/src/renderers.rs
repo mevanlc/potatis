@@ -472,8 +472,18 @@ impl ChafaRenderer {
       // so the output composes cleanly with TuiHost's own terminal control.
       "--polite".into(),
       "on".into(),
+      // Disable terminal capability probes. Despite our piped stdio, chafa
+      // would otherwise open /dev/tty (the controlling terminal) and send
+      // device-attribute queries, then wait up to its --probe timeout (5s by
+      // default!) for replies. The replies that *do* come back land in our
+      // own stdin — which crossterm is parsing for keypresses — and the
+      // long wait turns shutdown into a multi-second affair when several
+      // frames are in flight. We supply --view-size explicitly so chafa
+      // doesn't actually need to probe.
+      "--probe".into(),
+      "off".into(),
       // Explicit view size — required since our piped stdout means chafa
-      // can't probe the TTY.
+      // can't probe the TTY for it (and we just turned probing off anyway).
       "--view-size".into(),
       format!("{}x{}", self.cols.max(1), self.rows.max(1)),
     ];
@@ -638,6 +648,10 @@ mod tests {
     let argv = r.build_args();
     let joined = argv.join(" ");
     assert!(joined.contains("--polite on"), "always polite: {joined}");
+    assert!(
+      joined.contains("--probe off"),
+      "probing must be off so terminal-query replies don't pollute stdin: {joined}"
+    );
     assert!(
       joined.contains("--view-size 160x40"),
       "view-size from on_resize: {joined}"
