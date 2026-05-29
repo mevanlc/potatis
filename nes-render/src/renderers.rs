@@ -417,6 +417,9 @@ pub struct ChafaOpts {
   pub symbols: Option<String>,
   /// chafa `--scale`. A number (e.g. `2`, `1.5`) or `max` (fit to view).
   pub scale: Option<String>,
+  /// chafa `--work`. Effort 1.0..=9.0; higher = better quality, slower.
+  /// `None` lets chafa choose.
+  pub work: Option<f32>,
 }
 
 /// Renders frames by shelling out to the `chafa` CLI per frame.
@@ -498,6 +501,10 @@ impl ChafaRenderer {
     if let Some(sc) = &self.opts.scale {
       args.push("--scale".into());
       args.push(sc.clone());
+    }
+    if let Some(w) = self.opts.work {
+      args.push("--work".into());
+      args.push(format!("{w}"));
     }
     // Read image from stdin.
     args.push("-".into());
@@ -643,6 +650,7 @@ mod tests {
       format: Some("symbols".into()),
       symbols: Some("octant".into()),
       scale: Some("2".into()),
+      work: Some(7.0),
     });
     r.on_resize(160, 40);
     let argv = r.build_args();
@@ -662,6 +670,7 @@ mod tests {
       "symbols flag: {joined}"
     );
     assert!(joined.contains("--scale 2"), "scale flag: {joined}");
+    assert!(joined.contains("--work 7"), "work flag: {joined}");
     assert_eq!(argv.last().map(String::as_str), Some("-"), "reads stdin");
   }
 
@@ -674,6 +683,7 @@ mod tests {
     assert!(!joined.contains("--format"));
     assert!(!joined.contains("--symbols"));
     assert!(!joined.contains("--scale"));
+    assert!(!joined.contains("--work"));
   }
 
   #[test]

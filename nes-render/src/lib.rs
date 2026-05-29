@@ -6,8 +6,12 @@
 //! homing the cursor so successive frames overdraw in place.
 
 pub mod ansi;
+#[cfg(feature = "chafa-lib")]
+mod chafa_lib;
 mod renderers;
 
+#[cfg(feature = "chafa-lib")]
+pub use chafa_lib::ChafaLibRenderer;
 pub use renderers::create;
 pub use renderers::AsciiRenderer;
 pub use renderers::ChafaOpts;

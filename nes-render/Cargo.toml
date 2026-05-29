@@ -6,6 +6,13 @@ edition = "2021"
 # Shared terminal renderers for the NES frame buffer. Consumed by nes-cloud
 # (netcat/cloud gaming) and nes-tui (local crossterm client).
 
+[features]
+# Use libchafa directly (via chafa-sys FFI) for the in-process chafa renderer
+# (`ChafaLibRenderer`). Without this feature, only the subprocess-based
+# `ChafaRenderer` is available. Off by default so `nes-cloud` (which doesn't
+# render with chafa at all) doesn't pay the build-time cost.
+chafa-lib = ["dep:chafa-sys"]
+
 [dependencies]
 nes = { path = "../nes" }
 ansi_colours = "1.1.1"
@@ -14,6 +21,12 @@ tempfile = "3.3.0"
 png = "0.17.7"
 base64 = "0.22"
 flate2 = "1"
+chafa-sys = { version = "0.1.4", optional = true }
+
+[build-dependencies]
+# Only used when the `chafa-lib` feature is enabled. Cheap to depend on
+# unconditionally — it's a tiny crate already pulled in by chafa-sys.
+pkg-config = "0.3"
 
 [lib]
 doctest = false
